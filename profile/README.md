@@ -11,11 +11,23 @@ repositories together with pinned Git submodules.
 **Setup status:** `distro` is currently empty. The instructions below become
 usable after its first pinned baseline is published.
 
+## Start with one workfolder
+
+On Linux and Windows (WSL), keep all distro-related repos in `~/wip-os`.
+The recursive clone below will include the framework, bootloader and apps under
+`distro/sources/`; `.github` sits alongside `distro` for organization docs.
+
+Open **`~/wip-os`** in your editor, Codex or any other coding agent so it can work
+across the whole project. Each repository keeps its own commits and PRs.
+
 ## Linux setup
 
 Install Git and Python 3.11+, then run in a terminal:
 
 ```sh
+mkdir -p ~/wip-os
+cd ~/wip-os
+git clone https://github.com/WIPOperatingSystemName/.github.git
 git clone --recurse-submodules https://github.com/WIPOperatingSystemName/distro.git
 cd distro
 python3 build.py validate
@@ -47,7 +59,9 @@ Restart, open **Ubuntu**, and create your Linux user. Then run in Ubuntu:
 sudo apt update
 sudo apt install git python3
 python3 --version
-cd ~
+mkdir -p ~/wip-os
+cd ~/wip-os
+git clone https://github.com/WIPOperatingSystemName/.github.git
 git clone --recurse-submodules https://github.com/WIPOperatingSystemName/distro.git
 cd distro
 python3 build.py validate
