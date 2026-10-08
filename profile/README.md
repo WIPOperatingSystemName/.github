@@ -36,7 +36,8 @@ python3 ~/wip-os/.github/setup.py
 ```
 
 Linux is the reference environment for full builds and boot tests. Follow the
-[build guide](https://github.com/WIPOperatingSystemName/distro#telorgon-desktop-build).
+[emulator guide](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md)
+for QEMU installation, the first desktop build, launch commands and boot checks.
 Check distro tooling from `~/wip-os/distro`:
 
 ```sh
@@ -44,18 +45,28 @@ python3 build.py validate
 python3 -m unittest discover -s tests -v
 ```
 
-With a built `desktop-use` image, use QEMU and matching OVMF for boot tests.
+To open the emulator once `out/images/custom-distro-desktop-use.img` is built:
+
+```sh
+cd ~/wip-os/distro
+python3 build.py vm --use
+```
+
+This opens the Telorgon desktop in a QEMU window. Open File Explorer and Settings
+from the launcher. Close QEMU to stop; your VM's files and settings are saved.
+The emulator guide covers building the image if it is missing.
 
 ## Windows setup
 
-Install [WSL2 with Ubuntu](https://learn.microsoft.com/en-us/windows/wsl/install)
+Install [WSL2 with Ubuntu](https://ubuntu.com/wsl/docs/latest/howto/install-ubuntu-wsl2/)
 from **PowerShell as Administrator**:
 
 ```powershell
-wsl --install
+wsl --install -d Ubuntu-26.04
 ```
 
-Restart, open **Ubuntu**, and create your Linux user. Then run in Ubuntu:
+Restart if prompted, open **Ubuntu 26.04**, and create your Linux user. Then run
+in Ubuntu:
 
 ```sh
 sudo apt update
@@ -66,8 +77,19 @@ python3 ~/wip-os/.github/setup.py
 
 Check that Python is 3.11+. Keep the checkout in your
 [WSL home directory](https://learn.microsoft.com/en-us/windows/wsl/filesystems).
-Full distro builds and boot tests under WSL are still unverified; downloadable
-Windows/Linux test bundles are planned.
+Use the [Windows emulator steps](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md#windows-wsl2-and-wslg)
+to enable GUI support, install Linux QEMU inside Ubuntu and build the image.
+Once the image exists, launch it **in the Ubuntu terminal**:
+
+```sh
+cd ~/wip-os/distro
+python3 build.py vm --use
+```
+
+WSLg displays the QEMU window on your Windows desktop. The launcher uses software
+emulation when KVM is unavailable. Ubuntu 26.04 supplies the Meson version needed
+for desktop builds. Full distro builds and boot tests under WSL remain
+unverified; downloadable Windows/Linux test bundles are planned.
 
 ## Contribution workflow
 
