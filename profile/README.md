@@ -11,14 +11,6 @@ repositories together with pinned Git submodules.
 **Setup status:** source checkout and Linux tooling are available. Full remote
 builds and Windows boot testing still need verification.
 
-## Run the emulator
-
-Follow the **[QEMU emulator guide](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md)**
-to build the OS image, open the desktop and test the apps:
-
-- [Linux instructions](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md#linux)
-- [Windows instructions (WSL2 and WSLg)](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md#windows-wsl2-and-wslg)
-
 ## Start with one workfolder
 
 On Linux and Windows (WSL), use `~/wip-os` for the whole project. The setup below
@@ -98,6 +90,14 @@ WSLg displays the QEMU window on your Windows desktop. The launcher uses softwar
 emulation when KVM is unavailable. Ubuntu 26.04 supplies the Meson version needed
 for desktop builds. Full distro builds and boot tests under WSL remain
 unverified; downloadable Windows/Linux test bundles are planned.
+
+## Run the emulator
+
+Follow the **[QEMU emulator guide](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md)**
+to build the OS image, open the desktop and test the apps:
+
+- [Linux instructions](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md#linux)
+- [Windows instructions (WSL2 and WSLg)](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md#windows-wsl2-and-wslg)
 
 ## Contribution workflow
 
