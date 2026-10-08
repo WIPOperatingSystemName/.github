@@ -1,10 +1,10 @@
-name: Controller tests
+name: Automation and contributor setup tests
 on:
   push:
     branches: [main]
-    paths: ['automation/**', '.github/workflows/**']
+    paths: ['automation/**', 'setup.py', 'tests/**', '.github/workflows/**']
   pull_request:
-    paths: ['automation/**', '.github/workflows/**']
+    paths: ['automation/**', 'setup.py', 'tests/**', '.github/workflows/**']
 permissions:
   contents: read
 jobs:
@@ -16,3 +16,4 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -I -m unittest discover -s automation/tests -v
+      - run: python3 -I -m unittest discover -s tests -v
