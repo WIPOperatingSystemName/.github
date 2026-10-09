@@ -12,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import common
 import security_review as security
+import static_checks as checks
 from test_controller import fixture, revision
 from test_review_auth import FakeHTTP
 
@@ -39,7 +40,10 @@ class Sources:
                 return "diff --git a/src/main.py b/src/main.py\n-return value\n+return str(value)\n"
             return {"status": "ahead", "behind_by": 0, "files": self.files}
         if suffix.startswith("/contents/"):
-            content = self.after if suffix.endswith(revision(31)) else self.before
+            if repo == common.CONTROL:
+                content = b"Shared contributor instructions at an immutable controller revision\n"
+            else:
+                content = self.after if suffix.endswith(revision(31)) else self.before
             return {"type": "file", "encoding": "base64", "size": len(content),
                     "sha": blob(content), "content": base64.b64encode(content).decode()}
         raise AssertionError(suffix)
@@ -51,6 +55,13 @@ class SecurityTests(unittest.TestCase):
         self.api = Sources()
         self.bundle = fixture()
         self.bundle["prs"] = [self.bundle["prs"][1]]
+
+    def delegated_policy(self):
+        self.api.files[0]["filename"] = "AGENTS.md"
+
+    def checked_data(self):
+        data = security.candidate_data(self.api, self.bundle)
+        return data, {"source_digest": "a" * 64}
 
     def test_acceptance_requires_no_findings_limitations_or_missing_coverage(self):
         finding = {"repository": "settings", "path": "src/main.py", "line": 2, "severity": "low",
@@ -65,20 +76,55 @@ class SecurityTests(unittest.TestCase):
 
     def test_receipt_cannot_be_reused_for_another_commit_bundle_or_policy(self):
         receipt = {"policy": security.POLICY, "bundle_digest": self.bundle["digest"], "integration_head": revision(3),
-                   "model": "configured-model", "review": accepted()}
+                   "source_digest": "a" * 64, "model": "configured-model", "review": accepted(),
+                   "usage": {"input_tokens": None, "output_tokens": None, "cached_input_tokens": None}}
         for extra in [{"bundle_digest": "other"}, {"integration_head": revision(4)}, {"policy": "other"},
                       {"review": security.denied("Source requires context")}, {"model": "bad\nmodel"}]:
             with self.subTest(extra=extra), self.assertRaises(common.Failure):
-                security.validate_report({**receipt, **extra}, self.bundle, revision(3))
+                security.validate_report({**receipt, **extra}, self.bundle, revision(3), "a" * 64)
 
-    def test_full_before_after_content_is_fetched_at_exact_commits(self):
+    def test_complete_diff_and_full_new_source_avoid_duplicating_old_content(self):
         data = security.candidate_data(self.api, self.bundle)
         file = data["changes"][0]["files"][0]
-        self.assertEqual(file["before"], self.api.before.decode())
+        self.assertIsNone(file["before"])
         self.assertEqual(file["after"], self.api.after.decode())
-        self.assertTrue(any(suffix.endswith("?ref=" + revision(21)) for _, suffix, _ in self.api.calls))
+        self.assertIn("-return value", data["changes"][0]["diff"])
         self.assertTrue(any(suffix.endswith("?ref=" + revision(31)) for _, suffix, _ in self.api.calls))
         self.assertFalse(any("/pulls/" in suffix for _, suffix, _ in self.api.calls))
+
+    def test_deleted_source_is_covered_at_its_exact_base(self):
+        self.api.files[0]["status"] = "removed"
+        data = security.candidate_data(self.api, self.bundle)
+        self.assertEqual(data["changes"][0]["files"][0]["before"], self.api.before.decode())
+        self.assertIsNone(data["changes"][0]["files"][0]["after"])
+        self.assertTrue(any(suffix.endswith("?ref=" + revision(21)) for _, suffix, _ in self.api.calls))
+
+    def test_shared_policy_is_included_only_at_the_exact_controller_revision(self):
+        self.delegated_policy()
+        data = security.candidate_data(self.api, self.bundle)
+        context = data["controller_context"]
+        self.assertEqual(context["repository"], common.CONTROL)
+        self.assertEqual(context["revision"], self.bundle["controller_sha"])
+        self.assertEqual({file["path"] for file in context["files"]}, {"AGENTS.md", "profile/README.md"})
+        calls = [suffix for repo, suffix, _ in self.api.calls if repo == common.CONTROL]
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(suffix.endswith("?ref=" + self.bundle["controller_sha"]) for suffix in calls))
+        self.assertTrue(all(file["content"] for file in context["files"]))
+
+    def test_unavailable_shared_policy_blocks_acceptance(self):
+        self.delegated_policy()
+        original = self.api.repo
+        def endpoint(repo, suffix, **kwargs):
+            if repo == common.CONTROL:
+                raise common.Failure("Shared contributor policy unavailable")
+            return original(repo, suffix, **kwargs)
+        with patch.object(self.api, "repo", side_effect=endpoint), self.assertRaises(common.Failure):
+            security.candidate_data(self.api, self.bundle)
+
+    def test_unrelated_application_change_does_not_send_shared_setup_docs(self):
+        data = security.candidate_data(self.api, self.bundle)
+        self.assertEqual(data["controller_context"]["files"], [])
+        self.assertFalse(any(repo == common.CONTROL for repo, _, _ in self.api.calls))
 
     def test_untrusted_instructions_never_become_api_instructions(self):
         data = security.candidate_data(self.api, self.bundle)
@@ -120,6 +166,15 @@ class SecurityTests(unittest.TestCase):
         with patch.object(security, "MAX_INPUT_BYTES", 10), self.assertRaises(common.Failure):
             security.candidate_data(self.api, self.bundle)
 
+    def test_private_key_deleted_from_modified_source_is_not_sent_in_patch(self):
+        original = self.api.repo
+        def endpoint(repo, suffix, **kwargs):
+            if suffix.startswith("/compare/") and "accept" in kwargs:
+                return "diff --git a/key.py b/key.py\n------BEGIN PRIVATE KEY-----\n+removed\n"
+            return original(repo, suffix, **kwargs)
+        with patch.object(self.api, "repo", side_effect=endpoint), self.assertRaises(common.Failure):
+            security.candidate_data(self.api, self.bundle)
+
     def test_coverage_failure_writes_denial_without_calling_openai(self):
         with tempfile.TemporaryDirectory() as directory:
             report_path = Path(directory) / "security-review.json"
@@ -131,7 +186,7 @@ class SecurityTests(unittest.TestCase):
                 with patch.dict(os.environ, env), patch.object(security, "trusted_dispatch"), \
                         patch.object(security, "load_bundle", return_value=({}, self.bundle)), \
                         patch.object(security, "fresh"), \
-                        patch.object(security, "candidate_data", side_effect=common.Failure("Incomplete source context")), \
+                        patch.object(checks, "load_checked_data", side_effect=common.Failure("Incomplete source context")), \
                         patch.object(security, "openai_token") as auth, self.assertRaises(common.Failure):
                     security.main()
                 auth.assert_not_called()
@@ -151,13 +206,45 @@ class SecurityTests(unittest.TestCase):
                 with patch.dict(os.environ, env), patch.object(security, "trusted_dispatch"), \
                         patch.object(security, "load_bundle", return_value=({}, self.bundle)), \
                         patch.object(security, "fresh", side_effect=[None, None, common.Failure("Source moved")]), \
-                        patch.object(security, "candidate_data", return_value={}), \
+                        patch.object(checks, "load_checked_data", return_value=self.checked_data()), \
                         patch.object(security, "openai_token", return_value="fake-token"), \
                         patch.object(security, "structured_review", return_value=accepted()), self.assertRaises(common.Failure):
                     security.main()
                 self.assertEqual(json.loads(Path("security-review.json").read_text())["review"]["decision"], "deny")
             finally:
                 os.chdir(old)
+
+    def test_one_combined_request_accepts_without_build_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            old = Path.cwd()
+            try:
+                os.chdir(directory)
+                env = {"OPENAI_MODEL": "configured-model", "HUB_HEAD": revision(3), "HUB_PR": "99",
+                       "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary.md")}
+                http = FakeHTTP([{"status": "completed", "usage": {"input_tokens": 100, "output_tokens": 25},
+                                 "output": [{"type": "message", "content": [
+                                     {"type": "output_text", "text": json.dumps(accepted())}]}]}])
+                with patch.dict(os.environ, env), patch.object(security, "trusted_dispatch"), \
+                        patch.object(security, "load_bundle", return_value=({}, self.bundle)), \
+                        patch.object(security, "fresh"), patch.object(checks, "load_checked_data", return_value=self.checked_data()), \
+                        patch.object(security, "openai_token", return_value="fake-token"), patch.object(security, "HTTP", return_value=http):
+                    security.main()
+                self.assertEqual(len(http.calls), 1)
+                payload = http.calls[0][1]["payload"]
+                self.assertEqual(payload["max_output_tokens"], 4000)
+                receipt = json.loads(Path("security-review.json").read_text())
+                self.assertEqual(receipt["review"]["decision"], "accept")
+                self.assertEqual(receipt["usage"]["input_tokens"], 100)
+                self.assertNotIn("qualification", json.loads(payload["input"]))
+            finally:
+                os.chdir(old)
+
+    def test_correctness_and_compatibility_findings_block_acceptance(self):
+        for category in ("correctness", "compatibility"):
+            finding = {"repository": "settings", "path": "src/main.py", "line": 2, "severity": "medium",
+                       "category": category, "description": "The caller uses an argument removed by this change."}
+            with self.subTest(category=category), self.assertRaises(common.Failure):
+                security.validate_security({**accepted(), "findings": [finding]}, ["settings"])
 
 
 if __name__ == "__main__":

@@ -129,15 +129,18 @@ repository. It waits for your approval unless you already requested submission.
    repo’s `main`, or update the existing PR for the same work, with test results
    or reproduction steps and the verified upstream commit.
 5. Once the maintainer enables automatic integration, the central controller
-   groups ready PRs, requires OpenAI security acceptance and combined build/boot
-   checks, then merges exact component commits and adopts their tested pins.
+   groups ready PRs, requires lightweight static checks and one combined OpenAI
+   security/correctness review, then merges exact commits and adopts reviewed pins.
+   Build and boot verification are manual requirements before a release.
    Manual mode requires the maintainer's approval of the exact integration commit.
 
 To refresh a clean distro checkout on `main`: `git pull --ff-only origin main`,
 then `git submodule update --init --recursive`. Finish component branch work first.
 
-Automatic flow: OpenAI security gate → combined build/boot checks → general code
-review → controlled merge. A denied or incomplete security review blocks merging.
+Automatic flow: static source checks → one OpenAI security/correctness review →
+controlled merge. A denied or incomplete source review blocks merging. PR checks
+do not execute candidate code or require a self-hosted VM. An accepted source
+review does not prove that the distro builds or boots.
 The automation requires owner configuration before use; see
 [maintainer setup](https://github.com/WIPOperatingSystemName/.github/tree/main/automation).
 The maintainer controls merges and releases.

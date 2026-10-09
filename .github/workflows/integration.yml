@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Prepare a reviewed/tested bundle, or merge a manually approved bundle
+        description: Prepare a source-reviewed bundle, or merge a manually approved bundle
         type: choice
         options: [prepare, merge]
         default: prepare
@@ -63,10 +63,35 @@ jobs:
             python3 -I automation/controller.py prepare
           fi
 
-  security:
-    name: OpenAI security gate
+  checks:
+    name: Lightweight source checks
     needs: prepare
     if: needs.prepare.outputs.hub_pr != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify immutable inputs and parse source without executing it
+        env:
+          HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
+          HUB_HEAD: ${{ needs.prepare.outputs.hub_head }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -I automation/static_checks.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: checked-source
+          path: |
+            checked-source.json
+            static-checks.json
+          if-no-files-found: error
+          retention-days: 7
+
+  security:
+    name: OpenAI source review
+    needs: [prepare, checks]
     runs-on: ubuntu-24.04
     environment: openai-review
     timeout-minutes: 10
@@ -78,7 +103,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Accept or deny complete immutable source changes
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: checked-source
+      - name: Review security and correctness in one bounded API request
         env:
           HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
           HUB_HEAD: ${{ needs.prepare.outputs.hub_head }}
@@ -96,14 +124,15 @@ jobs:
           name: security-review
           path: security-review.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 7
 
   deny:
-    name: Record security denial
-    needs: [prepare, security]
+    name: Record source denial
+    needs: [prepare, checks, security]
     if: >-
       always() && needs.prepare.result == 'success' &&
-      needs.prepare.outputs.hub_pr != '' && needs.security.result == 'failure'
+      needs.prepare.outputs.hub_pr != '' &&
+      (needs.checks.result == 'failure' || needs.security.result == 'failure')
     runs-on: ubuntu-24.04
     environment: integration-control
     timeout-minutes: 10
@@ -125,88 +154,9 @@ jobs:
           INTEGRATION_APP_PRIVATE_KEY: ${{ secrets.INTEGRATION_APP_PRIVATE_KEY }}
         run: python3 -I automation/controller.py deny
 
-  qualify:
-    name: Qualify candidate
-    needs: [prepare, security]
-    # One fresh VM per job; destroy it afterwards. Never use a persistent workstation.
-    runs-on: [self-hosted, linux, x64, custom-distro-ephemeral]
-    timeout-minutes: 360
-    env:
-      HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
-      HUB_HEAD: ${{ needs.prepare.outputs.hub_head }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Prepare disposable worker seeds
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends build-essential bison bc m4 perl autoconf automake libtool pkg-config meson ninja-build fakeroot zlib1g-dev xz-utils qemu-system-x86 ovmf e2fsprogs gnupg python3-jinja2 cmake clang libclang-dev curl ca-certificates git
-          python3 - <<'PY'
-          import subprocess
-          version = subprocess.check_output(['/usr/bin/meson', '--version'], text=True).strip()
-          if tuple(map(int, version.split('.')[:2])) < (1, 5):
-              raise SystemExit('Seed this disposable worker with Meson >=1.5 at /usr/bin/meson')
-          PY
-          rustup toolchain install nightly-2026-10-06 --profile minimal --target x86_64-unknown-uefi --target x86_64-unknown-linux-gnu
-      - name: Fetch exact pins, build and boot the combined distro
-        run: python3 -I automation/qualify.py
-      - name: Preserve public runtime evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: candidate-evidence
-          retention-days: 14
-          if-no-files-found: warn
-          path: |
-            candidate/out/verification/**/result.json
-            candidate/out/verification/**/serial.log
-            candidate/out/verification/**/qemu.log
-            candidate/out/verification/**/command.json
-            candidate/out/verification/**/windows.json
-            candidate/out/verification/desktop-final/screen.ppm
-            candidate/out/ci/*.json
-            candidate/out/qualification/**/report.json
-            candidate/out/network-tests/**/qualification.json
-            candidate/out/signing-tests/**/qualification.json
-
-  review:
-    name: OpenAI review
-    needs: [prepare, qualify]
-    runs-on: ubuntu-24.04
-    environment: openai-review
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Review bounded PR diffs as data
-        env:
-          HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
-          HUB_HEAD: ${{ needs.prepare.outputs.hub_head }}
-          GITHUB_TOKEN: ${{ github.token }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          OPENAI_AUTH_MODE: ${{ vars.OPENAI_AUTH_MODE }}
-          OPENAI_IDENTITY_PROVIDER_ID: ${{ vars.OPENAI_IDENTITY_PROVIDER_ID }}
-          OPENAI_SERVICE_ACCOUNT_ID: ${{ vars.OPENAI_SERVICE_ACCOUNT_ID }}
-          OPENAI_WIF_AUDIENCE: ${{ vars.OPENAI_WIF_AUDIENCE }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python3 -I automation/review.py
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: ai-review
-          path: ai-review.json
-          if-no-files-found: error
-          retention-days: 14
-
   record:
     name: Record review and checks
-    needs: [prepare, security, qualify, review]
+    needs: [prepare, checks, security]
     runs-on: ubuntu-24.04
     environment: integration-control
     timeout-minutes: 10
@@ -220,13 +170,13 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: ai-review
-          path: review-artifact
+          name: checked-source
+          path: checks-artifact
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: security-review
           path: security-artifact
-      - name: Record report against tested commits
+      - name: Record source-only acceptance against exact commits
         env:
           HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
           HUB_HEAD: ${{ needs.prepare.outputs.hub_head }}
@@ -235,13 +185,13 @@ jobs:
           INTEGRATION_INSTALLATION_ID: ${{ vars.INTEGRATION_INSTALLATION_ID }}
           INTEGRATION_APP_PRIVATE_KEY: ${{ secrets.INTEGRATION_APP_PRIVATE_KEY }}
         run: |
-          cp review-artifact/ai-review.json ai-review.json
+          cp checks-artifact/static-checks.json static-checks.json
           cp security-artifact/security-review.json security-review.json
           python3 -I automation/controller.py record
 
   auto-merge:
-    name: Merge accepted and qualified bundle
-    needs: [prepare, security, qualify, review, record]
+    name: Merge source-reviewed bundle
+    needs: [prepare, checks, security, record]
     if: vars.AUTO_MERGE_ENABLED == 'true'
     runs-on: ubuntu-24.04
     environment: integration-control
@@ -254,7 +204,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Verify trusted security receipt and tests, then merge exact commits
+      - name: Verify trusted source review and static checks, then merge exact commits
         env:
           HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
           GITHUB_TOKEN: ${{ github.token }}

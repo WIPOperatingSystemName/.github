@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import common
 import controller as c
 import security_review as security
+import static_checks as checks
 
 
 def revision(n):
@@ -62,8 +63,8 @@ class FakeGitHub:
                        "description": f"Bundle {self.bundle['digest'][:16]}; run 100"}
         self.run = {"head_sha": revision(2), "head_branch": "main", "path": common.WORKFLOW,
                     "event": "workflow_dispatch", "actor": {"login": "owner"}, "status": "completed", "conclusion": "success"}
-        self.jobs = {"total_count": 4, "jobs": [{"name": name, "conclusion": "success"} for name in
-                     ["Qualify candidate", "OpenAI review", "OpenAI security gate", "Record review and checks"]]}
+        self.jobs = {"total_count": 3, "jobs": [{"name": name, "conclusion": "success"} for name in
+                     ["Lightweight source checks", "OpenAI source review", "Record review and checks"]]}
         self.merges, self.fail_repo, self.bad_tree = [], None, False
 
     def repo(self, repo, suffix="", **kwargs):
@@ -189,7 +190,7 @@ class MergeTests(unittest.TestCase):
                 self.refused()
                 self.api.run[field] = original
 
-    def test_build_and_review_jobs_must_both_succeed(self):
+    def test_static_and_review_jobs_must_both_succeed(self):
         for job in self.api.jobs["jobs"]:
             for conclusion in ["failure", "skipped", None]:
                 with self.subTest(job=job["name"], conclusion=conclusion):
@@ -198,7 +199,7 @@ class MergeTests(unittest.TestCase):
             job["conclusion"] = "success"
 
     def test_missing_security_job_cannot_use_old_success_receipts(self):
-        self.api.jobs["jobs"] = [job for job in self.api.jobs["jobs"] if job["name"] != "OpenAI security gate"]
+        self.api.jobs["jobs"] = [job for job in self.api.jobs["jobs"] if job["name"] != "OpenAI source review"]
         self.refused()
 
     def test_spoofed_or_stale_status(self):
@@ -297,8 +298,9 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(captured["/git/refs"]["ref"], "refs/heads/integration/100")
 
     def test_moved_hub_head_and_forged_report_cannot_record_success(self):
-        report = {"bundle_digest": self.api.bundle["digest"], "integration_head": self.api.head,
-                  "review": {"summary": "No findings", "findings": [], "limitations": []}}
+        report = {"policy": checks.POLICY, "bundle_digest": self.api.bundle["digest"],
+                  "integration_head": self.api.head, "source_digest": "a" * 64,
+                  "checks": checks.CHECKS, "files_checked": 2, "build_and_boot": "not_run"}
         with self.assertRaises(common.Failure):
             c.record(self.api, self.api, 99, revision(999), report, {})
         report["bundle_digest"] = "another-bundle"
@@ -306,14 +308,16 @@ class MergeTests(unittest.TestCase):
             c.record(self.api, self.api, 99, self.api.head, report, {})
 
     def test_missing_denied_and_stale_security_reports_cannot_publish_success(self):
-        report = {"bundle_digest": self.api.bundle["digest"], "integration_head": self.api.head,
-                  "review": {"summary": "No findings", "findings": [], "limitations": []}}
+        report = {"policy": checks.POLICY, "bundle_digest": self.api.bundle["digest"],
+                  "integration_head": self.api.head, "source_digest": "a" * 64,
+                  "checks": checks.CHECKS, "files_checked": 2, "build_and_boot": "not_run"}
         receipt = {"policy": security.POLICY, "bundle_digest": self.api.bundle["digest"],
-                   "integration_head": self.api.head, "model": "configured-model", "review": {
+                   "integration_head": self.api.head, "source_digest": "a" * 64, "model": "configured-model",
+                   "usage": {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 0}, "review": {
                        "decision": "accept", "coverage_complete": True,
                        "summary": "No security findings in supplied changes", "findings": [], "limitations": []}}
         for bad in [{}, {**receipt, "bundle_digest": "other"}, {**receipt, "integration_head": revision(999)},
-                    {**receipt, "review": security.denied("Unsafe change")}]:
+                    {**receipt, "source_digest": "b" * 64}, {**receipt, "review": security.denied("Unsafe change")}]:
             with self.subTest(receipt=bad), patch.object(self.api, "repo", wraps=self.api.repo) as requests:
                 with self.assertRaises(common.Failure):
                     c.record(self.api, self.api, 99, self.api.head, report, bad)
@@ -338,7 +342,7 @@ class MergeTests(unittest.TestCase):
         self.refused()
 
     def test_security_denial_publishes_failure_only_for_its_own_run(self):
-        gate = next(job for job in self.api.jobs["jobs"] if job["name"] == "OpenAI security gate")
+        gate = next(job for job in self.api.jobs["jobs"] if job["name"] == "OpenAI source review")
         gate["conclusion"] = "failure"
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "100", "GITHUB_JOB": "deny"}), \
                 patch.object(self.api, "repo", wraps=self.api.repo) as requests:
@@ -352,6 +356,25 @@ class MergeTests(unittest.TestCase):
         gate["conclusion"] = "success"
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "100", "GITHUB_JOB": "deny"}), self.assertRaises(common.Failure):
             c.deny(self.api, self.api, 99, self.api.head)
+
+    def test_static_failure_publishes_denial_when_paid_review_was_skipped(self):
+        for job in self.api.jobs["jobs"]:
+            job["conclusion"] = "failure" if job["name"] == "Lightweight source checks" else "skipped"
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "100", "GITHUB_JOB": "deny"}), \
+                patch.object(self.api, "repo", wraps=self.api.repo) as requests:
+            c.deny(self.api, self.api, 99, self.api.head)
+            failures = [call for call in requests.call_args_list if call.kwargs.get("payload", {}).get("state") == "failure"]
+            self.assertEqual(len(failures), 3)
+
+    def test_ai_acceptance_cannot_replace_missing_static_receipt(self):
+        receipt = {"policy": security.POLICY, "bundle_digest": self.api.bundle["digest"],
+                   "integration_head": self.api.head, "source_digest": "a" * 64, "model": "configured-model",
+                   "usage": {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 0}, "review": {
+                       "decision": "accept", "coverage_complete": True,
+                       "summary": "No findings", "findings": [], "limitations": []}}
+        with patch.object(self.api, "repo", wraps=self.api.repo) as requests, self.assertRaises(common.Failure):
+            c.record(self.api, self.api, 99, self.api.head, {}, receipt)
+        self.assertFalse(any("payload" in call.kwargs for call in requests.call_args_list))
 
     def test_unselected_pins_cannot_adopt_unmerged_component_code(self):
         original = self.api.repo
@@ -384,7 +407,7 @@ class AutomaticTests(unittest.TestCase):
             self.assertEqual(self.api.merges, [])
 
     def test_failed_security_or_unrecorded_result_blocks_auto_merge(self):
-        for name in ["OpenAI security gate", "Record review and checks"]:
+        for name in ["OpenAI source review", "Record review and checks"]:
             job = next(job for job in self.api.jobs["jobs"] if job["name"] == name)
             job["conclusion"] = "failure"
             with self.assertRaises(common.Failure):
@@ -402,6 +425,19 @@ class AutomaticTests(unittest.TestCase):
         self.api.hub["state"] = "closed"
         self.assertEqual(c.discover(self.api, revision(2)), "")
         self.assertEqual(c.discover(self.api, revision(999)), "telorgon#1,settings#2")
+
+    def test_unrelated_distro_merge_does_not_rebill_unchanged_components(self):
+        self.api.main[common.DISTRO] = revision(999)
+        self.assertEqual(c.discover(self.api, revision(2)), "")
+
+    def test_missing_merge_setup_fails_before_preparing_or_reviewing_candidate(self):
+        self.api.policy["enforce_admins"]["enabled"] = False
+        with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "workflow_dispatch", "PR_REFERENCES": "telorgon#1"}), \
+                patch.object(c, "trusted_dispatch"), patch.object(c, "app_client", return_value=self.api), \
+                patch.object(c, "prepare") as prepare, patch.object(sys, "argv", ["controller.py", "prepare"]), \
+                self.assertRaises(common.Failure):
+            c.main()
+        prepare.assert_not_called()
 
     def test_contributor_cannot_forge_attempt_receipts_to_suppress_review(self):
         self.api.hub["user"]["login"] = "contributor"
