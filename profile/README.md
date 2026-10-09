@@ -8,8 +8,12 @@ together. It's still experimental.
 You can contribute to any part. The `distro` repository brings all seven
 repositories together with pinned Git submodules.
 
-**Setup status:** source checkout and Linux tooling are available. Full remote
-builds and Windows boot testing still need verification.
+**Build status (2026-10-08):** a local Ubuntu 24.04 WSL2 build completed all 72
+runtime packages, passed 97 tests and booted the systemd image in a Windows-visible
+QEMU window through WSLg, using the bootstrap/recipe/launcher fixes from that run.
+The current Telorgon, Shell and Settings source pins are incompatible, so a fresh
+desktop build is blocked. Full remote CI and desktop rendering for these pins
+remain unverified. See the [current build status](../docs/emulator.md#current-build-status).
 
 ## Start with one workfolder
 
@@ -62,10 +66,10 @@ Install [WSL2 with Ubuntu](https://ubuntu.com/wsl/docs/latest/howto/install-ubun
 from **PowerShell as Administrator**:
 
 ```powershell
-wsl --install -d Ubuntu-26.04
+wsl --install -d Ubuntu-24.04
 ```
 
-Restart if prompted, open **Ubuntu 26.04**, and create your Linux user. Then run
+Restart if prompted, open **Ubuntu 24.04**, and create your Linux user. Then run
 in Ubuntu:
 
 ```sh
@@ -87,9 +91,11 @@ python3 build.py vm --use
 ```
 
 WSLg displays the QEMU window on your Windows desktop. The launcher uses software
-emulation when KVM is unavailable. Ubuntu 26.04 supplies the Meson version needed
-for desktop builds. Full distro builds and boot tests under WSL remain
-unverified; downloadable Windows/Linux test bundles are planned.
+emulation when KVM is unavailable. Distro bootstrap supplies pinned Meson 1.9.2
+under `out/`; upgrading Ubuntu for its host Meson version is unnecessary. The
+systemd boot check is verified locally under WSLg; the emulator guide includes
+its launch command while the desktop pins are being corrected. Downloadable
+Windows/Linux test bundles are planned.
 
 ## Run the emulator
 
