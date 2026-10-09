@@ -1,10 +1,12 @@
 name: Distro integration
 
 on:
+  schedule:
+    - cron: '17,47 * * * *'
   workflow_dispatch:
     inputs:
       operation:
-        description: Prepare a tested bundle, or merge an approved bundle
+        description: Prepare a reviewed/tested bundle, or merge a manually approved bundle
         type: choice
         options: [prepare, merge]
         default: prepare
@@ -21,13 +23,19 @@ permissions:
 
 env:
   INTEGRATION_ENABLED: ${{ vars.INTEGRATION_ENABLED }}
+  AUTO_MERGE_ENABLED: ${{ vars.AUTO_MERGE_ENABLED }}
   MAINTAINER_LOGIN: ${{ vars.MAINTAINER_LOGIN }}
+
+concurrency:
+  group: distro-integration
+  cancel-in-progress: false
 
 jobs:
   prepare:
     name: Prepare bundle
     if: >-
-      inputs.operation == 'prepare' && vars.INTEGRATION_ENABLED == 'true' &&
+      (inputs.operation == 'prepare' || (github.event_name == 'schedule' && vars.AUTO_MERGE_ENABLED == 'true')) &&
+      vars.INTEGRATION_ENABLED == 'true' &&
       github.actor == vars.MAINTAINER_LOGIN && github.triggering_actor == vars.MAINTAINER_LOGIN &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -48,11 +56,78 @@ jobs:
           INTEGRATION_APP_ID: ${{ vars.INTEGRATION_APP_ID }}
           INTEGRATION_INSTALLATION_ID: ${{ vars.INTEGRATION_INSTALLATION_ID }}
           INTEGRATION_APP_PRIVATE_KEY: ${{ secrets.INTEGRATION_APP_PRIVATE_KEY }}
-        run: python3 -I automation/controller.py prepare
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            python3 -I automation/controller.py prepare-auto
+          else
+            python3 -I automation/controller.py prepare
+          fi
+
+  security:
+    name: OpenAI security gate
+    needs: prepare
+    if: needs.prepare.outputs.hub_pr != ''
+    runs-on: ubuntu-24.04
+    environment: openai-review
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Accept or deny complete immutable source changes
+        env:
+          HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
+          HUB_HEAD: ${{ needs.prepare.outputs.hub_head }}
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_AUTH_MODE: ${{ vars.OPENAI_AUTH_MODE }}
+          OPENAI_IDENTITY_PROVIDER_ID: ${{ vars.OPENAI_IDENTITY_PROVIDER_ID }}
+          OPENAI_SERVICE_ACCOUNT_ID: ${{ vars.OPENAI_SERVICE_ACCOUNT_ID }}
+          OPENAI_WIF_AUDIENCE: ${{ vars.OPENAI_WIF_AUDIENCE }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python3 -I automation/security_review.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: security-review
+          path: security-review.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  deny:
+    name: Record security denial
+    needs: [prepare, security]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      needs.prepare.outputs.hub_pr != '' && needs.security.result == 'failure'
+    runs-on: ubuntu-24.04
+    environment: integration-control
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Publish failed trusted status for exact rejected commits
+        env:
+          HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
+          HUB_HEAD: ${{ needs.prepare.outputs.hub_head }}
+          GITHUB_TOKEN: ${{ github.token }}
+          INTEGRATION_APP_ID: ${{ vars.INTEGRATION_APP_ID }}
+          INTEGRATION_INSTALLATION_ID: ${{ vars.INTEGRATION_INSTALLATION_ID }}
+          INTEGRATION_APP_PRIVATE_KEY: ${{ secrets.INTEGRATION_APP_PRIVATE_KEY }}
+        run: python3 -I automation/controller.py deny
 
   qualify:
     name: Qualify candidate
-    needs: prepare
+    needs: [prepare, security]
     # One fresh VM per job; destroy it afterwards. Never use a persistent workstation.
     runs-on: [self-hosted, linux, x64, custom-distro-ephemeral]
     timeout-minutes: 360
@@ -131,7 +206,7 @@ jobs:
 
   record:
     name: Record review and checks
-    needs: [prepare, qualify, review]
+    needs: [prepare, security, qualify, review]
     runs-on: ubuntu-24.04
     environment: integration-control
     timeout-minutes: 10
@@ -147,6 +222,10 @@ jobs:
         with:
           name: ai-review
           path: review-artifact
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: security-review
+          path: security-artifact
       - name: Record report against tested commits
         env:
           HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
@@ -157,7 +236,32 @@ jobs:
           INTEGRATION_APP_PRIVATE_KEY: ${{ secrets.INTEGRATION_APP_PRIVATE_KEY }}
         run: |
           cp review-artifact/ai-review.json ai-review.json
+          cp security-artifact/security-review.json security-review.json
           python3 -I automation/controller.py record
+
+  auto-merge:
+    name: Merge accepted and qualified bundle
+    needs: [prepare, security, qualify, review, record]
+    if: vars.AUTO_MERGE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment: integration-control
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify trusted security receipt and tests, then merge exact commits
+        env:
+          HUB_PR: ${{ needs.prepare.outputs.hub_pr }}
+          GITHUB_TOKEN: ${{ github.token }}
+          INTEGRATION_APP_ID: ${{ vars.INTEGRATION_APP_ID }}
+          INTEGRATION_INSTALLATION_ID: ${{ vars.INTEGRATION_INSTALLATION_ID }}
+          INTEGRATION_APP_PRIVATE_KEY: ${{ secrets.INTEGRATION_APP_PRIVATE_KEY }}
+        run: python3 -I automation/controller.py merge-auto
 
   merge:
     name: Merge approved bundle

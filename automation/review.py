@@ -78,22 +78,34 @@ def validate_review(value, repositories):
     return value
 
 
-def review(http, token, model, data, *, max_output_tokens=4000):
-    repositories = [p["repository"] for p in data["changes"]]
+def structured_review(http, token, model, data, *, instructions, output_schema,
+                      name, max_output_tokens=4000):
     response = http.request("https://api.openai.com/v1/responses", token=token, payload={
         "model": model, "store": False, "max_output_tokens": max_output_tokens,
-        "instructions": INSTRUCTIONS, "input": redact(json.dumps(data, ensure_ascii=True)),
-        "text": {"format": {"type": "json_schema", "name": "distro_code_review",
-                            "strict": True, "schema": schema(repositories)}},
+        "instructions": instructions, "input": redact(json.dumps(data, ensure_ascii=True)),
+        "text": {"format": {"type": "json_schema", "name": name,
+                            "strict": True, "schema": output_schema}},
     })
     if response.get("status") != "completed":
         raise Failure("OpenAI did not finish the review; no qualification status will be issued")
-    parts = [content["text"] for item in response.get("output", []) if item.get("type") == "message"
-             for content in item.get("content", []) if content.get("type") == "output_text"]
+    messages = [item for item in response.get("output", []) if item.get("type") == "message"]
+    contents = [content for item in messages for content in item.get("content", [])]
+    parts = [content["text"] for content in contents if content.get("type") == "output_text"]
+    if (len(messages) != 1 or len(parts) != 1
+            or any(content.get("type") == "refusal" for content in contents)):
+        raise Failure("OpenAI returned a refusal or ambiguous structured review")
     try:
-        result = json.loads("".join(parts))
+        result = json.loads(parts[0])
     except (ValueError, TypeError):
         raise Failure("OpenAI returned no valid structured review") from None
+    return result
+
+
+def review(http, token, model, data, *, max_output_tokens=4000):
+    repositories = [p["repository"] for p in data["changes"]]
+    result = structured_review(http, token, model, data, instructions=INSTRUCTIONS,
+                               output_schema=schema(repositories), name="distro_code_review",
+                               max_output_tokens=max_output_tokens)
     return validate_review(result, repositories)
 
 

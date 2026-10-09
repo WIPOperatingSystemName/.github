@@ -128,14 +128,16 @@ repository. It waits for your approval unless you already requested submission.
    run `git push -u fork HEAD`. Open a PR from your fork to that organization
    repo’s `main`, or update the existing PR for the same work, with test results
    or reproduction steps and the verified upstream commit.
-5. The main maintainer groups related PRs into a distro integration PR, checks
-   combined builds/boot tests and AI findings, then approves the exact commit.
-   The central controller merges components and adopts the tested pins.
+5. Once the maintainer enables automatic integration, the central controller
+   groups ready PRs, requires OpenAI security acceptance and combined build/boot
+   checks, then merges exact component commits and adopts their tested pins.
+   Manual mode requires the maintainer's approval of the exact integration commit.
 
 To refresh a clean distro checkout on `main`: `git pull --ff-only origin main`,
 then `git submodule update --init --recursive`. Finish component branch work first.
 
-Review flow: combined CI tests → AI review → maintainer approval → controlled merge.
+Automatic flow: OpenAI security gate → combined build/boot checks → general code
+review → controlled merge. A denied or incomplete security review blocks merging.
 The automation requires owner configuration before use; see
 [maintainer setup](https://github.com/WIPOperatingSystemName/.github/tree/main/automation).
 The maintainer controls merges and releases.

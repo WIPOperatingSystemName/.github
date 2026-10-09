@@ -114,11 +114,13 @@ def trusted_dispatch():
     if (os.environ.get("GITHUB_ACTIONS") != "true"
             or os.environ.get("GITHUB_REPOSITORY") != CONTROL
             or os.environ.get("GITHUB_REF") != "refs/heads/main"
-            or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+            or os.environ.get("GITHUB_EVENT_NAME") not in {"workflow_dispatch", "schedule"}
             or os.environ.get("GITHUB_WORKFLOW_REF") != expected):
         raise Failure("Privileged integration only runs from the trusted main workflow")
     if os.environ.get("INTEGRATION_ENABLED") != "true":
         raise Failure("Complete setup, then set INTEGRATION_ENABLED=true")
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and os.environ.get("AUTO_MERGE_ENABLED") != "true":
+        raise Failure("Scheduled integration requires AUTO_MERGE_ENABLED=true")
     owner = required("MAINTAINER_LOGIN").casefold()
     if (os.environ.get("GITHUB_ACTOR", "").casefold() != owner
             or os.environ.get("GITHUB_TRIGGERING_ACTOR", "").casefold() != owner):
