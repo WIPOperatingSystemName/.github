@@ -153,6 +153,7 @@ install it only on `distro`, `telorgon`, `bootloader`, `shell`, `file-explorer`,
 | Contents | Read and write |
 | Pull requests | Read and write |
 | Commit statuses | Read and write |
+| Workflows | Read and write (prepare and merge workflow-file changes) |
 | Administration | Read only (audit branch protection) |
 | Metadata | Read only |
 
@@ -162,6 +163,14 @@ In `integration-control`, save the generated PEM as secret
 token limited to those seven repositories. Its key file is private and temporary.
 The App does not need access to `.github`: that repository's read-only Actions
 token audits trusted source-check runs. See [GitHub App authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
+
+For an existing App, add **Workflows: read and write** under its **Permissions &
+events**, save, and approve the updated permissions on its organization
+installation. The controller also requests `workflows: write` in its temporary
+token. Both grants are needed to prepare branches and merge PRs that change
+`.github/workflows/`; Contents write alone is insufficient. A GitHub 403 during
+prepare can indicate this missing grant. This App permission is separate from
+the notification token's Actions permission.
 
 Before any merge, configure **classic branch protection** on `main` in all seven
 repositories. This version audits classic protections; rulesets alone won't pass.

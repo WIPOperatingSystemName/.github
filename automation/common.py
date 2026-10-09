@@ -84,7 +84,8 @@ class HTTP:
             with urllib.request.build_opener(NoRedirect()).open(request, timeout=180) as response:
                 body = response.read(limit + 1)
         except urllib.error.HTTPError as error:
-            raise Failure(f"{host} returned HTTP {error.code}; response body withheld") from None
+            target = f"{request.get_method()} {host}{parsed.path}" if host == "api.github.com" else host
+            raise Failure(f"{redact(target)} returned HTTP {error.code}; response body withheld") from None
         except (urllib.error.URLError, TimeoutError):
             raise Failure(f"Could not reach {host}") from None
         if len(body) > limit:
@@ -151,7 +152,7 @@ def app_client(http=None):
     response = http.request(f"https://api.github.com/app/installations/{installation}/access_tokens",
                             token=jwt, payload={"repositories": ["distro", *MODULES],
                             "permissions": {"contents": "write", "pull_requests": "write",
-                                            "statuses": "write",
+                                            "statuses": "write", "workflows": "write",
                                             "administration": "read"}})
     client = GitHub(remember_secret(response["token"]), http)
     client.app_id, client.bot_login = int(app_id), identity["slug"] + "[bot]"

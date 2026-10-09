@@ -1,10 +1,13 @@
 import copy
+import io
 import json
 import os
+import subprocess
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import common
@@ -98,6 +101,43 @@ class ReviewTests(unittest.TestCase):
 class AuthTests(unittest.TestCase):
     def setUp(self):
         common.SECRETS.clear()
+
+    def test_installation_token_can_prepare_workflow_changes_only_in_the_seven_source_repos(self):
+        class WorkflowHTTP(FakeHTTP):
+            def request(self, url, **kwargs):
+                if url.endswith("/git/refs"):
+                    if self.calls[1][1]["payload"]["permissions"].get("workflows") != "write":
+                        raise common.Failure("GitHub rejects new workflow files without Workflows write")
+                return super().request(url, **kwargs)
+
+        http = WorkflowHTTP([{"slug": "integration-test"}, {"token": "installation-test-token"}, {"ref": "refs/heads/integration/100"}])
+        env = {"INTEGRATION_APP_ID": "123", "INTEGRATION_INSTALLATION_ID": "456",
+               "INTEGRATION_APP_PRIVATE_KEY": "fake-test-key", "GITHUB_ACTIONS": "false"}
+        signature = subprocess.CompletedProcess([], 0, b"fake-signature", b"")
+        with patch.dict(os.environ, env), patch.object(common.subprocess, "run", return_value=signature):
+            client = common.app_client(http)
+        self.assertEqual(client.app_id, 123)
+        self.assertEqual(client.bot_login, "integration-test[bot]")
+        payload = http.calls[1][1]["payload"]
+        self.assertEqual(payload["repositories"], ["distro", *common.MODULES])
+        self.assertEqual(payload["permissions"], {"contents": "write", "pull_requests": "write",
+                                               "statuses": "write", "workflows": "write", "administration": "read"})
+        client.repo(common.DISTRO, "/git/refs", payload={"ref": "refs/heads/integration/100", "sha": "1" * 40})
+        self.assertEqual(http.calls[-1][1]["token"], "installation-test-token")
+
+    def test_github_http_errors_identify_request_without_query_body_or_credentials(self):
+        token = common.remember_secret("private-sentinel")
+        url = "https://api.github.com/repos/WIPOperatingSystemName/distro/git/refs?credential=query-sentinel"
+        error = urllib.error.HTTPError(url, 403, "Forbidden", {}, io.BytesIO(b"body-sentinel"))
+        opener = Mock()
+        opener.open.side_effect = error
+        with patch.object(common.urllib.request, "build_opener", return_value=opener):
+            with self.assertRaises(common.Failure) as raised:
+                common.HTTP().request(url, token=token, payload={"ref": "refs/heads/integration/100"})
+        message = str(raised.exception)
+        self.assertIn("POST api.github.com/repos/WIPOperatingSystemName/distro/git/refs returned HTTP 403", message)
+        for secret in ["private-sentinel", "query-sentinel", "body-sentinel"]:
+            self.assertNotIn(secret, message)
 
     def test_oidc_exchange_without_persistent_key(self):
         http = FakeHTTP([{"value": "github-jwt"}, {"token_type": "Bearer", "access_token": "short-lived"}])
