@@ -10,6 +10,8 @@ With `INTEGRATION_ENABLED=true` and `AUTO_MERGE_ENABLED=true`:
    oldest unattempted ready PR in each repository. It creates an exact distro
    integration bundle; contributor PRs can use their existing fork `main`.
 3. OpenAI analyzes the immutable diff and full before/after changed text files.
+   Shared contribution instructions and their setup guide are included at the
+   same immutable controller revision, so delegated policy can be assessed.
    A security finding, material missing context, malformed/refused/incomplete
    response, or API failure denies the candidate and stops the build and merge.
 4. Accepted candidates build and boot on a disposable worker. A separate general

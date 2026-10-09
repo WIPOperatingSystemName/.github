@@ -39,7 +39,10 @@ class Sources:
                 return "diff --git a/src/main.py b/src/main.py\n-return value\n+return str(value)\n"
             return {"status": "ahead", "behind_by": 0, "files": self.files}
         if suffix.startswith("/contents/"):
-            content = self.after if suffix.endswith(revision(31)) else self.before
+            if repo == common.CONTROL:
+                content = b"Shared contributor instructions at an immutable controller revision\n"
+            else:
+                content = self.after if suffix.endswith(revision(31)) else self.before
             return {"type": "file", "encoding": "base64", "size": len(content),
                     "sha": blob(content), "content": base64.b64encode(content).decode()}
         raise AssertionError(suffix)
@@ -79,6 +82,26 @@ class SecurityTests(unittest.TestCase):
         self.assertTrue(any(suffix.endswith("?ref=" + revision(21)) for _, suffix, _ in self.api.calls))
         self.assertTrue(any(suffix.endswith("?ref=" + revision(31)) for _, suffix, _ in self.api.calls))
         self.assertFalse(any("/pulls/" in suffix for _, suffix, _ in self.api.calls))
+
+    def test_shared_policy_is_included_only_at_the_exact_controller_revision(self):
+        data = security.candidate_data(self.api, self.bundle)
+        context = data["controller_context"]
+        self.assertEqual(context["repository"], common.CONTROL)
+        self.assertEqual(context["revision"], self.bundle["controller_sha"])
+        self.assertEqual({file["path"] for file in context["files"]}, {"AGENTS.md", "profile/README.md"})
+        calls = [suffix for repo, suffix, _ in self.api.calls if repo == common.CONTROL]
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(suffix.endswith("?ref=" + self.bundle["controller_sha"]) for suffix in calls))
+        self.assertTrue(all(file["content"] for file in context["files"]))
+
+    def test_unavailable_shared_policy_blocks_acceptance(self):
+        original = self.api.repo
+        def endpoint(repo, suffix, **kwargs):
+            if repo == common.CONTROL:
+                raise common.Failure("Shared contributor policy unavailable")
+            return original(repo, suffix, **kwargs)
+        with patch.object(self.api, "repo", side_effect=endpoint), self.assertRaises(common.Failure):
+            security.candidate_data(self.api, self.bundle)
 
     def test_untrusted_instructions_never_become_api_instructions(self):
         data = security.candidate_data(self.api, self.bundle)
