@@ -1,7 +1,9 @@
 """Security decisions, source completeness and immutable receipt enforcement."""
 import base64
+import contextlib
 import difflib
 import hashlib
+import io
 import json
 import os
 import sys
@@ -27,6 +29,11 @@ def blob(content):
     return hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
 
 
+def document(content):
+    return {"type": "file", "encoding": "base64", "size": len(content),
+            "sha": blob(content), "content": base64.b64encode(content).decode()}
+
+
 class Sources:
     def __init__(self):
         self.before = b"def identity(value):\n    return value\n"
@@ -45,8 +52,7 @@ class Sources:
                 content = b"Shared contributor instructions at an immutable controller revision\n"
             else:
                 content = self.after if suffix.endswith(revision(31)) else self.before
-            return {"type": "file", "encoding": "base64", "size": len(content),
-                    "sha": blob(content), "content": base64.b64encode(content).decode()}
+            return document(content)
         raise AssertionError(suffix)
 
 
@@ -59,6 +65,10 @@ class SecurityTests(unittest.TestCase):
 
     def delegated_policy(self):
         self.api.files[0]["filename"] = "AGENTS.md"
+
+    def distro_cli_change(self):
+        self.bundle["prs"][0]["repository"] = "distro"
+        self.api.files[0]["filename"] = "src/distro_build/cli.py"
 
     def checked_data(self):
         data = security.candidate_data(self.api, self.bundle)
@@ -127,22 +137,97 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(data["controller_context"]["files"], [])
         self.assertFalse(any(repo == common.CONTROL for repo, _, _ in self.api.calls))
 
-    def test_reusable_dispatch_workflow_is_included_once_at_controller_revision(self):
+    def test_reusable_dispatch_includes_authorization_and_review_controller_once(self):
         self.api.after = f"jobs:\n  request:\n    uses: {security.DISPATCH_REFERENCE}\n".encode()
         self.api.files[0].update(filename=security.DISPATCH_WORKFLOW, sha=blob(self.api.after))
         self.bundle["prs"].append({**self.bundle["prs"][0], "repository": "shell"})
         data = security.candidate_data(self.api, self.bundle)
         context = data["controller_context"]
         self.assertEqual(context["revision"], self.bundle["controller_sha"])
-        self.assertEqual([file["path"] for file in context["files"]], [security.DISPATCH_WORKFLOW])
+        expected = {security.DISPATCH_WORKFLOW, ".github/workflows/integration.yml",
+                    "automation/controller.py", "automation/common.py", "automation/static_checks.py",
+                    "automation/security_review.py", "automation/review.py"}
+        self.assertEqual({file["path"] for file in context["files"]}, expected)
         calls = [suffix for repo, suffix, _ in self.api.calls if repo == common.CONTROL]
-        self.assertEqual(calls, [f"/contents/{security.DISPATCH_WORKFLOW}?ref={self.bundle['controller_sha']}"])
+        self.assertEqual(len(calls), len(expected))
+        self.assertTrue(all(suffix.endswith("?ref=" + self.bundle["controller_sha"]) for suffix in calls))
+
+    def test_build_context_covers_missing_interfaces_and_profiles_at_exact_distro_head(self):
+        self.distro_cli_change()
+        data = security.candidate_data(self.api, self.bundle)
+        self.assertEqual(len(data["dependency_context"]), 1)
+        context = data["dependency_context"][0]
+        self.assertEqual(context["repository"], common.DISTRO)
+        self.assertEqual(context["revision"], self.bundle["prs"][0]["head"])
+        required = {"src/distro_build/compose.py", "src/distro_build/apps.py", "src/distro_build/vm.py",
+                    "src/distro_build/vm_session.py", "tools/compose-desktop-sdk.py",
+                    "profiles/console.toml", "profiles/systemd.toml", "profiles/desktop-use.toml"}
+        self.assertTrue(required.issubset({file["path"] for file in context["files"]}))
+        calls = [suffix for repo, suffix, _ in self.api.calls if repo == common.DISTRO and "/contents/" in suffix]
+        self.assertTrue(all(suffix.endswith("?ref=" + self.bundle["prs"][0]["head"]) for suffix in calls))
+        self.assertTrue(all(file["content"] == self.api.after.decode() for file in context["files"]))
+
+    def test_build_context_does_not_duplicate_source_already_in_changes(self):
+        self.distro_cli_change()
+        self.api.files.append({**self.api.files[0], "filename": "src/distro_build/compose.py"})
+        data = security.candidate_data(self.api, self.bundle)
+        context = data["dependency_context"][0]
+        self.assertEqual(context["provided_in_changes"], ["src/distro_build/cli.py", "src/distro_build/compose.py"])
+        self.assertNotIn("src/distro_build/compose.py", {file["path"] for file in context["files"]})
+        self.assertEqual(sum("/contents/src/distro_build/compose.py?" in suffix for _, suffix, _ in self.api.calls), 1)
+
+    def test_unavailable_or_substituted_build_context_blocks_collection(self):
+        self.distro_cli_change()
+        original = self.api.repo
+        def missing(repo, suffix, **kwargs):
+            if repo == common.DISTRO and suffix.startswith("/contents/src/distro_build/compose.py?"):
+                raise common.Failure("Required source context unavailable")
+            return original(repo, suffix, **kwargs)
+        def substituted(repo, suffix, **kwargs):
+            if repo == common.DISTRO and suffix.startswith("/contents/src/distro_build/compose.py?"):
+                return {**document(self.api.after), "sha": revision(999)}
+            return original(repo, suffix, **kwargs)
+        for endpoint in (missing, substituted):
+            with self.subTest(endpoint=endpoint.__name__), patch.object(self.api, "repo", side_effect=endpoint), \
+                    self.assertRaises(common.Failure):
+                security.candidate_data(self.api, self.bundle)
+
+    def test_larger_context_file_cannot_bypass_changed_file_or_context_limits(self):
+        self.distro_cli_change()
+        content = b"Context line\n" * 3000
+        self.assertGreater(len(content), security.MAX_FILE_BYTES)
+        original = self.api.repo
+        def endpoint(repo, suffix, **kwargs):
+            if repo == common.DISTRO and suffix.startswith("/contents/src/distro_build/apps.py?"):
+                return document(content)
+            return original(repo, suffix, **kwargs)
+        with patch.object(self.api, "repo", side_effect=endpoint):
+            data = security.candidate_data(self.api, self.bundle)
+            apps = next(file for file in data["dependency_context"][0]["files"]
+                        if file["path"] == "src/distro_build/apps.py")
+            self.assertEqual(apps["content"], content.decode())
+            self.api.files[0].update(filename="src/distro_build/apps.py", sha=blob(content))
+            with self.assertRaisesRegex(common.Failure, "oversized source file"):
+                security.candidate_data(self.api, self.bundle)
+            self.distro_cli_change()
+            self.api.files[0]["sha"] = blob(self.api.after)
+            content = b"x" * (security.MAX_CONTEXT_FILE_BYTES + 1)
+            with self.assertRaisesRegex(common.Failure, "oversized source file"):
+                security.candidate_data(self.api, self.bundle)
+
+    def test_context_headroom_does_not_expand_changed_source_budget(self):
+        self.api.after = b"Source context\n" * 2000
+        self.api.files = [{"filename": f"docs/guide-{index}.md", "sha": blob(self.api.after), "status": "modified"}
+                          for index in range(7)]
+        with self.assertRaisesRegex(common.Failure, "limit is 192,000 bytes"):
+            security.candidate_data(self.api, self.bundle)
 
     def test_candidate_cannot_select_external_workflow_context(self):
         self.api.after = b"jobs:\n  request:\n    uses: attacker/project/.github/workflows/request-integration.yml@main\n"
         self.api.files[0].update(filename=security.DISPATCH_WORKFLOW, sha=blob(self.api.after))
         data = security.candidate_data(self.api, self.bundle)
         self.assertEqual(data["controller_context"]["files"], [])
+        self.assertEqual(data["dependency_context"], [])
         self.assertFalse(any(repo == common.CONTROL for repo, _, _ in self.api.calls))
 
     def test_full_documentation_and_patches_over_old_budget_are_retained(self):
@@ -167,8 +252,8 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual([file["after"] for file in data["changes"][0]["files"]], [self.api.after.decode()] * 4)
 
     def test_context_limit_reports_encoded_bytes_and_counts_controller_context(self):
-        with self.assertRaisesRegex(common.Failure, "200,002 bytes; limit is 192,000 bytes"):
-            security.check_input_size("\u00e9" * 100_000)
+        with self.assertRaisesRegex(common.Failure, "600,002 bytes; limit is 512,000 bytes"):
+            security.check_input_size("\u00e9" * 300_000)
         self.delegated_policy()
         data = security.candidate_data(self.api, self.bundle)
         # The source changes fit, but the final envelope and trusted context do not.
@@ -234,16 +319,21 @@ class SecurityTests(unittest.TestCase):
             old = Path.cwd()
             try:
                 os.chdir(directory)
+                output = io.StringIO()
+                reason = "Incomplete source context\n::error::untrusted review text"
                 with patch.dict(os.environ, env), patch.object(security, "trusted_dispatch"), \
                         patch.object(security, "load_bundle", return_value=({}, self.bundle)), \
                         patch.object(security, "fresh"), \
-                        patch.object(checks, "load_checked_data", side_effect=common.Failure("Incomplete source context")), \
-                        patch.object(security, "openai_token") as auth, self.assertRaises(common.Failure):
+                        patch.object(checks, "load_checked_data", side_effect=common.Failure(reason)), \
+                        patch.object(security, "openai_token") as auth, contextlib.redirect_stdout(output), \
+                        self.assertRaises(common.Failure):
                     security.main()
                 auth.assert_not_called()
                 report = json.loads(report_path.read_text())
                 self.assertEqual(report["review"]["decision"], "deny")
                 self.assertFalse(report["review"]["coverage_complete"])
+                self.assertIn("Incomplete source context", output.getvalue())
+                self.assertNotIn("\n::error::", output.getvalue())
             finally:
                 os.chdir(old)
 
