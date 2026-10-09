@@ -6,9 +6,10 @@ With `INTEGRATION_ENABLED=true` and `AUTO_MERGE_ENABLED=true`:
 
 1. Contributors open ready PRs in the six component repositories or `distro`,
    updating their source branches from the canonical `main`.
-2. The trusted `.github/main` workflow polls every 30 minutes and selects the
-   oldest unattempted ready PR in each repository. It creates an exact distro
-   integration bundle; contributor PRs can use their existing fork `main`.
+2. PR notifications request an immediate scan by the trusted `.github/main`
+   workflow. The 30-minute poll remains a fallback. Both select the oldest
+   unattempted ready PR in each repository and create an exact distro integration
+   bundle; contributor PRs can use their existing fork `main`.
 3. Standard GitHub-hosted runners fetch immutable source data, audit the six
    canonical module mappings and pins, parse changed Python/JSON/TOML files, and
    check changed package recipe metadata. Candidate code is never executed.
@@ -35,7 +36,7 @@ See [GitHub scheduled workflow behavior](https://docs.github.com/en/actions/refe
 
 An App-owned integration receipt remembers attempted source/base/controller
 revisions, including closed or denied bundles. Unchanged failed revisions are
-not repeatedly sent to OpenAI by polling, even when an unrelated distro merge
+not repeatedly sent to OpenAI by notifications or polling, even when an unrelated distro merge
 moves the distro baseline. A new dependency combination can be retried manually. Fix or update the source, or have the
 maintainer deliberately dispatch **prepare** with e.g.
 `telorgon#42,file-explorer#18,settings#9` to retry. A manual prepare also merges
@@ -206,6 +207,35 @@ Configure the required App checks and zero-approval automatic protections, then
 set `AUTO_MERGE_ENABLED=true` and dispatch a fresh prepare. Verify the resulting
 component/distro trees and denial behavior before treating remote integration as
 verified. No VM provisioner or build-runner registration is part of this setup.
+
+### PR notifications
+
+Merge the controller and reusable `request-integration.yml` workflow into
+`.github/main` first, then add the caller workflow in each of the seven source
+repositories. New, reopened, updated and newly ready PRs targeting `main` request
+a scan; draft PRs and generated distro integration PRs are ignored. Base changes
+also request a scan. The caller uses `pull_request_target` so fork PRs can notify
+the controller, but neither caller nor reusable workflow checks out or executes
+PR code or interpolates PR content into a command.
+
+Create a **fine-grained personal access token** owned by `MAINTAINER_LOGIN`, with
+resource owner `WIPOperatingSystemName`, selected repository **`.github` only**,
+and **Actions: read and write** (plus the implicit Metadata permission). Save it
+as organization Actions secret `INTEGRATION_DISPATCH_TOKEN`, accessible only to
+`distro`, `telorgon`, `bootloader`, `shell`, `file-explorer`, `settings` and
+`portal-picker`. A repository secret with the same name in each caller also
+works. This separate token dispatches workflows; it has no Contents, merge, App
+private key or OpenAI access. Do not reuse the integration App key or a broadly
+scoped login token. See [workflow dispatch permissions](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
+
+The notification dispatches `operation=scan` on `.github/main` without PR-supplied
+arguments. GitHub attributes the dispatch to the token's maintainer, preserving
+the existing actor and rerun checks. Scan uses the same receipt deduplication,
+automatic-mode flags, source review and protected merge flow as polling. It does
+not force a paid retry; explicit `prepare` retains that manual behavior. Missing
+or expired dispatch credentials fail the notification visibly, while polling
+continues. GitHub runner availability and the serialized controller still govern
+when a requested scan starts.
 
 ## Manual verification before release
 

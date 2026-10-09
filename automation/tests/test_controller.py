@@ -1,13 +1,15 @@
 """Exercise real authorization logic against a stateful fake GitHub API."""
 import base64
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import common
@@ -400,6 +402,10 @@ class AutomaticTests(unittest.TestCase):
     def test_merges_without_human_approval_after_all_trusted_jobs_pass(self):
         self.assertEqual(c.merge(self.api, self.api, 99, automatic=True), revision(203))
 
+    def test_scan_dispatch_can_merge_only_after_the_same_trusted_jobs_pass(self):
+        self.api.run["event"] = "workflow_dispatch"
+        self.assertEqual(c.merge(self.api, self.api, 99, automatic=True), revision(203))
+
     def test_wrong_job_run_and_disabled_flag_cannot_merge(self):
         for field, value in [("AUTO_MERGE_ENABLED", "false"), ("GITHUB_RUN_ID", "101"), ("GITHUB_JOB", "prepare")]:
             with patch.dict(os.environ, {field: value}), self.assertRaises(common.Failure):
@@ -453,6 +459,54 @@ class AutomaticTests(unittest.TestCase):
             return original(repo, suffix, **kwargs)
         with patch.object(self.api, "repo", side_effect=endpoint):
             self.assertEqual(c.discover(self.api, revision(2)), "")
+
+    def scan(self, event="workflow_dispatch", operation="scan", enabled="true"):
+        env = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": common.CONTROL,
+               "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": event,
+               "GITHUB_WORKFLOW_REF": f"{common.CONTROL}/{common.WORKFLOW}@refs/heads/main",
+               "INTEGRATION_ENABLED": "true", "AUTO_MERGE_ENABLED": enabled,
+               "GITHUB_ACTOR": "owner", "GITHUB_TRIGGERING_ACTOR": "owner",
+               "INTEGRATION_OPERATION": operation}
+        with patch.dict(os.environ, env), patch.object(c, "app_client", return_value=self.api), \
+                patch.object(c, "GitHub", return_value=self.api), \
+                patch.object(sys, "argv", ["controller.py", "prepare-auto"]), \
+                contextlib.redirect_stdout(io.StringIO()) as captured:
+            c.main()
+        return captured.getvalue()
+
+    def test_notifications_and_polling_do_not_retry_an_attempted_revision(self):
+        self.api.hub["state"] = "closed"
+        with patch.object(c, "prepare") as prepare, patch.object(c, "merge_preflight") as preflight:
+            for event in ["workflow_dispatch", "workflow_dispatch", "schedule"]:
+                self.assertIn("No new ready source revisions", self.scan(event))
+            prepare.assert_not_called()
+            preflight.assert_not_called()
+
+    def test_notification_discovers_updated_head_and_publishes_bundle_outputs(self):
+        repo = f"{common.ORG}/settings"
+        self.api.prs[repo]["head"]["sha"] = revision(500)
+        self.api.commits[repo, revision(500)] = {"tree": {"sha": revision(501)}, "parents": []}
+        with patch.object(c, "prepare", return_value=(101, revision(502))) as prepare, \
+                patch.object(c, "merge_preflight") as preflight, patch.object(c, "output") as output:
+            self.assertIn("Prepared", self.scan())
+        preflight.assert_called_once_with(self.api, "settings#2")
+        prepare.assert_called_once_with(self.api, "settings#2", "100", revision(2))
+        self.assertEqual(output.call_args_list,
+                         [call("hub_pr", 101), call("hub_head", revision(502))])
+
+    def test_notification_discovers_new_pr_without_retrying_an_older_pr(self):
+        self.api.prs[f"{common.ORG}/settings"]["number"] = 3
+        with patch.object(c, "prepare", return_value=(101, revision(502))) as prepare, \
+                patch.object(c, "output"):
+            self.scan()
+        prepare.assert_called_once_with(self.api, "settings#3", "100", revision(2))
+
+    def test_scan_cannot_bypass_disabled_mode_or_use_a_pr_event_or_explicit_prepare(self):
+        with patch.object(c, "prepare") as prepare:
+            for kwargs in [{"enabled": "false"}, {"event": "pull_request_target"}, {"operation": "prepare"}]:
+                with self.subTest(kwargs=kwargs), self.assertRaises(common.Failure):
+                    self.scan(**kwargs)
+            prepare.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Prepare a source-reviewed bundle, or merge a manually approved bundle
+        description: Scan ready PRs, prepare an explicit bundle, or merge an approved bundle
         type: choice
-        options: [prepare, merge]
+        options: [prepare, scan, merge]
         default: prepare
         required: true
       pull_requests:
@@ -34,7 +34,8 @@ jobs:
   prepare:
     name: Prepare bundle
     if: >-
-      (inputs.operation == 'prepare' || (github.event_name == 'schedule' && vars.AUTO_MERGE_ENABLED == 'true')) &&
+      (inputs.operation == 'prepare' ||
+       ((github.event_name == 'schedule' || inputs.operation == 'scan') && vars.AUTO_MERGE_ENABLED == 'true')) &&
       vars.INTEGRATION_ENABLED == 'true' &&
       github.actor == vars.MAINTAINER_LOGIN && github.triggering_actor == vars.MAINTAINER_LOGIN &&
       github.ref == 'refs/heads/main'
@@ -53,11 +54,12 @@ jobs:
         id: prepare
         env:
           PR_REFERENCES: ${{ inputs.pull_requests }}
+          INTEGRATION_OPERATION: ${{ inputs.operation }}
           INTEGRATION_APP_ID: ${{ vars.INTEGRATION_APP_ID }}
           INTEGRATION_INSTALLATION_ID: ${{ vars.INTEGRATION_INSTALLATION_ID }}
           INTEGRATION_APP_PRIVATE_KEY: ${{ secrets.INTEGRATION_APP_PRIVATE_KEY }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+          if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$INTEGRATION_OPERATION" = scan ]; then
             python3 -I automation/controller.py prepare-auto
           else
             python3 -I automation/controller.py prepare
