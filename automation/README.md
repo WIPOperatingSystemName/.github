@@ -84,13 +84,21 @@ The workflow keeps requests bounded:
 - Static failures stop before OpenAI authentication or inference. Automatic mode
   also audits merge protection setup before preparing a candidate, avoiding
   paid reviews that cannot merge because setup is incomplete.
-- Input is compact UTF-8 JSON, limited to 24 changed files, 32 KB per full text
-  file, 60 KB per repository patch and **192 KB serialized total**. Full old text
-  is omitted for modified files because changed old lines are already in the
-  complete patch. Callers of the organization's reusable integration workflow
-  include that workflow at the immutable controller revision. Unrelated shared
-  setup documents are omitted. The serialized ceiling includes source context;
-  exceeding it reports the measured size and blocks the request without truncation.
+- Changed input is compact UTF-8 JSON, limited to 24 files, 32 KB per full text
+  file, 60 KB per repository patch and **192 KB serialized changes**. Full old
+  text is omitted for modified files because changed old lines are already in
+  the complete patch.
+- Review context comes from fixed file sets. Integration workflow callers
+  include the reusable workflow, integration workflow, controller, authorization,
+  source-check and review implementations at the immutable controller revision.
+  Distro CLI/build/image/VM changes include the build and packaging interfaces,
+  SDK composer and profiles at that distro PR's exact head. Full changed files
+  already in the input are referenced instead of duplicated. Context files have
+  a 64 KB ceiling; the **complete input has a 512 KB serialized ceiling**. This
+  permits larger paid inputs than the previous 192 KB total ceiling. Missing,
+  oversized or substituted context fails before authentication/inference;
+  exceeding a serialized limit reports the measured bytes. Source is never
+  truncated, and unrelated changes do not include these context sets.
 - Output has a **4,000-token ceiling**, including a concise summary and at most
   12 concrete findings. Input, output and cached-input token counts are recorded
   when supplied by the API, including for incomplete responses. Missing usage

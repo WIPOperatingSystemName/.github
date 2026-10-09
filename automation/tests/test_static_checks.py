@@ -83,6 +83,8 @@ class StaticTests(unittest.TestCase):
                 checks.validate_report({**self.report(), **extra}, self.bundle, revision(3))
 
     def test_modified_source_artifact_cannot_reach_paid_review(self):
+        self.data["controller_context"] = {"files": [{"path": "automation/controller.py", "content": "trusted gates"}]}
+        self.data["dependency_context"] = [{"files": [{"path": "src/distro_build/compose.py", "content": "image API"}]}]
         with tempfile.TemporaryDirectory() as directory:
             old = Path.cwd()
             try:
@@ -90,11 +92,16 @@ class StaticTests(unittest.TestCase):
                 Path("static-checks.json").write_text(json.dumps(self.report()))
                 Path("checked-source.json").write_text(json.dumps(self.data))
                 self.assertEqual(checks.load_checked_data(self.bundle, revision(3))[0], self.data)
-                changed = copy.deepcopy(self.data)
-                changed["changes"][0]["files"][0]["after"] = "print('substitution')"
-                Path("checked-source.json").write_text(json.dumps(changed))
-                with self.assertRaises(common.Failure):
-                    checks.load_checked_data(self.bundle, revision(3))
+                for field in ("changes", "controller_context", "dependency_context"):
+                    changed = copy.deepcopy(self.data)
+                    if field == "changes":
+                        changed[field][0]["files"][0]["after"] = "print('substitution')"
+                    else:
+                        context = changed[field] if field == "controller_context" else changed[field][0]
+                        context["files"][0]["content"] = "substituted interface"
+                    Path("checked-source.json").write_text(json.dumps(changed))
+                    with self.subTest(field=field), self.assertRaises(common.Failure):
+                        checks.load_checked_data(self.bundle, revision(3))
             finally:
                 os.chdir(old)
 
