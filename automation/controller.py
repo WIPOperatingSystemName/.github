@@ -515,8 +515,10 @@ def main():
     readonly = GitHub(os.environ.get("GITHUB_TOKEN") or None)
     if operation in {"prepare", "prepare-auto"}:
         if operation == "prepare-auto":
-            if os.environ.get("AUTO_MERGE_ENABLED") != "true" or os.environ.get("GITHUB_EVENT_NAME") != "schedule":
-                raise Failure("Automatic discovery requires an enabled scheduled run")
+            event = os.environ.get("GITHUB_EVENT_NAME")
+            requested_scan = event == "workflow_dispatch" and os.environ.get("INTEGRATION_OPERATION") == "scan"
+            if os.environ.get("AUTO_MERGE_ENABLED") != "true" or not (event == "schedule" or requested_scan):
+                raise Failure("Automatic discovery requires an enabled schedule or scan dispatch")
             references = discover(client, required("GITHUB_SHA"))
             if not references:
                 print("No new ready source revisions; no paid API request scheduled")
