@@ -85,9 +85,12 @@ The workflow keeps requests bounded:
   also audits merge protection setup before preparing a candidate, avoiding
   paid reviews that cannot merge because setup is incomplete.
 - Input is compact UTF-8 JSON, limited to 24 changed files, 32 KB per full text
-  file, 60 KB per repository patch and **96 KB serialized total**. Full old text
+  file, 60 KB per repository patch and **192 KB serialized total**. Full old text
   is omitted for modified files because changed old lines are already in the
-  complete patch. Unrelated shared setup documents are omitted.
+  complete patch. Callers of the organization's reusable integration workflow
+  include that workflow at the immutable controller revision. Unrelated shared
+  setup documents are omitted. The serialized ceiling includes source context;
+  exceeding it reports the measured size and blocks the request without truncation.
 - Output has a **4,000-token ceiling**, including a concise summary and at most
   12 concrete findings. Input, output and cached-input token counts are recorded
   when supplied by the API, including for incomplete responses. Missing usage

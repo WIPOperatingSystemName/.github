@@ -1,5 +1,6 @@
 """Security decisions, source completeness and immutable receipt enforcement."""
 import base64
+import difflib
 import hashlib
 import json
 import os
@@ -125,6 +126,56 @@ class SecurityTests(unittest.TestCase):
         data = security.candidate_data(self.api, self.bundle)
         self.assertEqual(data["controller_context"]["files"], [])
         self.assertFalse(any(repo == common.CONTROL for repo, _, _ in self.api.calls))
+
+    def test_reusable_dispatch_workflow_is_included_once_at_controller_revision(self):
+        self.api.after = f"jobs:\n  request:\n    uses: {security.DISPATCH_REFERENCE}\n".encode()
+        self.api.files[0].update(filename=security.DISPATCH_WORKFLOW, sha=blob(self.api.after))
+        self.bundle["prs"].append({**self.bundle["prs"][0], "repository": "shell"})
+        data = security.candidate_data(self.api, self.bundle)
+        context = data["controller_context"]
+        self.assertEqual(context["revision"], self.bundle["controller_sha"])
+        self.assertEqual([file["path"] for file in context["files"]], [security.DISPATCH_WORKFLOW])
+        calls = [suffix for repo, suffix, _ in self.api.calls if repo == common.CONTROL]
+        self.assertEqual(calls, [f"/contents/{security.DISPATCH_WORKFLOW}?ref={self.bundle['controller_sha']}"])
+
+    def test_candidate_cannot_select_external_workflow_context(self):
+        self.api.after = b"jobs:\n  request:\n    uses: attacker/project/.github/workflows/request-integration.yml@main\n"
+        self.api.files[0].update(filename=security.DISPATCH_WORKFLOW, sha=blob(self.api.after))
+        data = security.candidate_data(self.api, self.bundle)
+        self.assertEqual(data["controller_context"]["files"], [])
+        self.assertFalse(any(repo == common.CONTROL for repo, _, _ in self.api.calls))
+
+    def test_full_documentation_and_patches_over_old_budget_are_retained(self):
+        self.api.before = ("Unchanged context\n" * 1000 + "Old paragraph\n" * 450).encode()
+        self.api.after = ("Unchanged context\n" * 1000 + "New paragraph\n" * 450).encode()
+        self.api.files = [{"filename": f"docs/guide-{index}.md", "sha": blob(self.api.after), "status": "modified"}
+                          for index in range(4)]
+        diff = "".join("diff --git a/{0} b/{0}\n".format(file["filename"]) + "".join(difflib.unified_diff(
+            self.api.before.decode().splitlines(True), self.api.after.decode().splitlines(True),
+            fromfile="a/" + file["filename"], tofile="b/" + file["filename"])) for file in self.api.files)
+        self.assertLess(len(diff.encode()), security.MAX_DIFF_BYTES)
+        original = self.api.repo
+        def endpoint(repo, suffix, **kwargs):
+            if suffix.startswith("/compare/") and "accept" in kwargs:
+                return diff
+            return original(repo, suffix, **kwargs)
+        with patch.object(self.api, "repo", side_effect=endpoint):
+            data = security.candidate_data(self.api, self.bundle)
+        self.assertGreater(len(security.encode_input(data).encode()), 96_000)
+        self.assertLessEqual(len(security.encode_input(data).encode()), security.MAX_INPUT_BYTES)
+        self.assertEqual(data["changes"][0]["diff"], diff)
+        self.assertEqual([file["after"] for file in data["changes"][0]["files"]], [self.api.after.decode()] * 4)
+
+    def test_context_limit_reports_encoded_bytes_and_counts_controller_context(self):
+        with self.assertRaisesRegex(common.Failure, "200,002 bytes; limit is 192,000 bytes"):
+            security.check_input_size("\u00e9" * 100_000)
+        self.delegated_policy()
+        data = security.candidate_data(self.api, self.bundle)
+        # The source changes fit, but the final envelope and trusted context do not.
+        limit = len(security.encode_input(data["changes"]).encode())
+        with patch.object(security, "MAX_INPUT_BYTES", limit), self.assertRaisesRegex(
+                common.Failure, "Split the change bundle"):
+            security.candidate_data(self.api, self.bundle)
 
     def test_untrusted_instructions_never_become_api_instructions(self):
         data = security.candidate_data(self.api, self.bundle)
