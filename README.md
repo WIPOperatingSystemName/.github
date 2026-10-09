@@ -1,20 +1,16 @@
-# WIPOperatingSystemName contributor hub
+# WIPOperatingSystemName
 
-We are building an independent Linux distribution with the Telorgon desktop,
-application SDK and apps.
+An independent Linux distribution with the Telorgon desktop, application SDK
+and everyday apps.
 
-## Project setup
+Start with the [workspace setup](profile/README.md), then build and open an OS test image:
 
-Follow the [organization quickstart](profile/README.md) to prepare your workspace
-on Linux or Windows and learn the contribution workflow.
+```sh
+cd ~/wip-os/distro
+python3 build.py run --profile systemd
+```
 
-## Run the emulator
-
-The **[QEMU emulator guide](docs/emulator.md)** covers installation, building the
-OS image, opening the desktop, testing apps and troubleshooting.
-
-- [Linux instructions](docs/emulator.md#linux)
-- [Windows instructions (WSL2 and WSLg)](docs/emulator.md#windows-wsl2-and-wslg)
-
-Maintainers can find integration and review configuration in the
-[automation guide](automation/README.md).
+- [Build guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md): host prerequisites, build stages and testing.
+- [Emulator guide](docs/emulator.md): Linux/Windows GUI setup and QEMU troubleshooting.
+- [Contribution instructions](AGENTS.md): repository synchronization and pull requests.
+- [Maintainer automation](automation/README.md): integration and review configuration.
