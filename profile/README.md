@@ -107,6 +107,11 @@ to build the OS image, open the desktop and test the apps:
 
 ## Contribution workflow
 
+Each repository's root `AGENTS.md` points coding agents to the
+[shared contribution instructions](../AGENTS.md). After making and checking
+changes, an agent offers to commit them and open a PR to the owning organization
+repository. It waits for your approval unless you already requested submission.
+
 1. Pick an issue and say you're working on it.
 2. In the repo you’re editing, run `git fetch origin`, then
    `git switch -c fix/my-change origin/main`. Use `distro` for packaging/build tools,
