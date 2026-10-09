@@ -1,4 +1,4 @@
-"""Create, qualify and merge immutable distro change bundles; no model authority."""
+"""Create, qualify and merge exact bundles under the configured merge policy."""
 from __future__ import annotations
 
 import base64
@@ -103,15 +103,13 @@ def validate_bundle(bundle):
     return bundle
 
 
-def load_bundle(github, hub_number, expected_head=None):
-    hub = github.repo(DISTRO, f"/pulls/{number(hub_number)}")
-    if (hub["state"] != "open" or hub["draft"] or hub["base"]["ref"] != "main"
+def read_bundle(github, hub, *, audit=True):
+    if (hub["draft"] or hub["base"]["ref"] != "main"
+            or hub["base"]["repo"]["full_name"] != DISTRO
             or hub["head"]["repo"]["full_name"] != DISTRO
             or not re.fullmatch(r"integration/[1-9][0-9]{0,18}", hub["head"]["ref"])):
-        raise Failure("Expected an open controller-created distro integration PR")
+        raise Failure("Expected a controller-created distro integration PR")
     head = sha(hub["head"]["sha"])
-    if expected_head is not None and head != sha(expected_head):
-        raise Failure("Integration PR changed; prepare and qualify it again")
     run = hub["head"]["ref"].split("/")[1]
     path = f".integration/bundles/{run}.json"
     document = github.repo(DISTRO, f"/contents/{path}?ref={head}")
@@ -123,7 +121,96 @@ def load_bundle(github, hub_number, expected_head=None):
         raise Failure("Invalid integration manifest encoding") from None
     if bundle["run_id"] != number(run):
         raise Failure("Manifest run and integration branch differ")
-    return hub, bundle
+    if audit:
+        audit_hub(github, head, bundle)
+    return bundle
+
+
+def audit_hub(github, head, bundle):
+    """The generated commit may change only reviewed pins and its exact receipt."""
+    source = next((pr for pr in bundle["prs"] if pr["repository"] == "distro"), None)
+    parent = source["head"] if source else bundle["distro_base"]
+    if [item["sha"] for item in commit(github, DISTRO, head)["parents"]] != [parent]:
+        raise Failure("Integration commit has an unexpected parent")
+    if _initial_pins(github, head) != bundle["pins"]:
+        raise Failure("Integration source pins differ from the reviewed bundle")
+    comparison = github.repo(DISTRO, f"/compare/{parent}...{head}")
+    files = comparison.get("files")
+    if (comparison.get("status") != "ahead" or comparison.get("behind_by") != 0
+            or comparison.get("total_commits") != 1 or not isinstance(files, list)
+            or not 1 <= len(files) <= 7):
+        raise Failure("Integration commit comparison is incomplete")
+    path = f".integration/bundles/{bundle['run_id']}.json"
+    content = (json.dumps(bundle, indent=2, sort_keys=True) + "\n").encode()
+    blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
+    expected = {MODULES[r]: pin for r, pin in bundle["pins"].items()}
+    expected[path] = blob
+    found = set()
+    for file in files:
+        filename = file.get("filename")
+        if (filename not in expected or filename in found
+                or file.get("sha") != expected[filename]
+                or file.get("status") != ("added" if filename == path else "modified")):
+            raise Failure("Integration commit contains unreviewed changes")
+        found.add(filename)
+    if path not in found:
+        raise Failure("Integration commit has no immutable manifest addition")
+
+
+def load_bundle(github, hub_number, expected_head=None):
+    hub = github.repo(DISTRO, f"/pulls/{number(hub_number)}")
+    if hub["state"] != "open":
+        raise Failure("Expected an open controller-created distro integration PR")
+    if expected_head is not None and sha(hub["head"]["sha"]) != sha(expected_head):
+        raise Failure("Integration PR changed; prepare and qualify it again")
+    return hub, read_bundle(github, hub)
+
+
+def discover(github, controller_sha):
+    """Select ready changes once per source/base/controller state, oldest first."""
+    controller_sha = sha(controller_sha)
+    distro_base = branch_head(github, DISTRO)
+    attempted = set()
+    # Both open and closed App-owned receipts count. A failed or denied revision
+    # is retried by a deliberate manual prepare, or after its inputs change.
+    for page in range(1, 11):
+        receipts = github.repo(DISTRO, f"/pulls?state=all&base=main&sort=created&direction=desc&per_page=100&page={page}")
+        for hub in receipts:
+            if (hub.get("user", {}).get("login") != github.bot_login
+                    or hub["head"]["repo"] is None
+                    or hub["head"]["repo"]["full_name"] != DISTRO
+                    or not re.fullmatch(r"integration/[1-9][0-9]{0,18}", hub["head"]["ref"])):
+                continue
+            bundle = read_bundle(github, hub, audit=False)
+            if bundle["controller_sha"] == controller_sha and bundle["distro_base"] == distro_base:
+                audit_hub(github, sha(hub["head"]["sha"]), bundle)
+                attempted.update((pr["repository"], pr["number"], pr["base"], pr["head"])
+                                 for pr in bundle["prs"])
+        if len(receipts) < 100:
+            break
+    else:
+        raise Failure("Automatic receipt audit exceeds 1,000 PRs; use manual prepare")
+    refs = []
+    for short in [*MODULES, "distro"]:
+        repo = f"{ORG}/{short}"
+        pulls = github.repo(repo, "/pulls?state=open&base=main&sort=created&direction=asc&per_page=100")
+        if len(pulls) >= 100:
+            raise Failure("Automatic discovery exceeds 100 open PRs per repository; use manual prepare")
+        for pr in pulls:
+            if (pr["draft"] or (short == "distro" and pr["head"]["repo"] is not None
+                    and pr["head"]["repo"]["full_name"] == DISTRO
+                    and pr["head"]["ref"].startswith("integration/"))):
+                continue
+            try:
+                candidate = snapshot(github, short, pr["number"])
+            except Failure:
+                # Contributors must update behind branches before qualification.
+                continue
+            identity = (short, candidate["number"], candidate["base"], candidate["head"])
+            if identity not in attempted:
+                refs.append(f"{short}#{candidate['number']}")
+                break
+    return ",".join(refs)
 
 
 def candidate_state(github, pr, *, allow_merged=False):
@@ -217,10 +304,15 @@ def prepare(github, references, run_id, controller_sha):
     lines += [f"- {ORG}/{p['repository']}#{p['number']} at `{p['head']}`" for p in prs]
     lines += ["", f"Manifest digest: `{bundle['digest']}`.", "",
               f"Qualification: https://github.com/{CONTROL}/actions/runs/{run_id}", "",
-              "Wait for qualification and AI review, then approve this exact PR commit. "
-              "The maintainer runs the controller's merge operation after approval."]
+              "Qualification and an accepted security review are required for these exact commits. "
+              "Automatic mode merges after the trusted checks pass; manual mode also requires "
+              "maintainer approval and a merge dispatch."]
     hub = github.repo(DISTRO, "/pulls", payload={"title": f"Integration bundle {run_id}",
                      "head": branch, "base": "main", "body": "\n".join(lines)})
+    qualification_status(github, DISTRO, created["sha"], bundle, "pending")
+    for pr in prs:
+        if pr["repository"] != "distro":
+            qualification_status(github, f"{ORG}/{pr['repository']}", pr["head"], bundle, "pending")
     return number(hub["number"]), sha(created["sha"])
 
 
@@ -232,24 +324,47 @@ def qualification_status(github, repo, head, bundle, state):
     })
 
 
-def _run(github, bundle, *, completed):
+def _jobs(github, bundle, *, completed):
     run = github.repo(CONTROL, f"/actions/runs/{bundle['run_id']}")
     if (run["head_sha"] != bundle["controller_sha"] or run["path"] != WORKFLOW
             or run["head_branch"] != "main"
-            or run["event"] != "workflow_dispatch"
+            or run["event"] not in {"workflow_dispatch", "schedule"}
             or run["actor"]["login"].casefold() != required("MAINTAINER_LOGIN").casefold()
             or (completed and (run["status"] != "completed" or run["conclusion"] != "success"))):
         raise Failure("Qualification must come from the trusted maintainer workflow and succeed")
     jobs = github.repo(CONTROL, f"/actions/runs/{bundle['run_id']}/jobs?per_page=100")
     if jobs["total_count"] > 100:
         raise Failure("Qualification job audit exceeds its size limit")
-    found = {job["name"]: job["conclusion"] for job in jobs["jobs"]}
-    if found.get("Qualify candidate") != "success" or found.get("OpenAI review") != "success":
-        raise Failure("Both deterministic qualification and OpenAI review must succeed")
+    return {job["name"]: job["conclusion"] for job in jobs["jobs"]}
 
 
-def record(github, readonly, hub_number, expected_head, report):
+def _run(github, bundle, *, completed, recorded=False):
+    found = _jobs(github, bundle, completed=completed)
+    required_jobs = {"Qualify candidate", "OpenAI review", "OpenAI security gate"}
+    if recorded:
+        required_jobs.add("Record review and checks")
+    if any(found.get(name) != "success" for name in required_jobs):
+        raise Failure("Qualification, security acceptance and the required review jobs must succeed")
+
+
+def deny(github, readonly, hub_number, expected_head):
+    hub, bundle = load_bundle(github, hub_number, expected_head)
+    if (bundle["controller_sha"] != sha(required("GITHUB_SHA"))
+            or str(bundle["run_id"]) != required("GITHUB_RUN_ID")
+            or os.environ.get("GITHUB_JOB") != "deny"):
+        raise Failure("Denial must come from this candidate's trusted failure-recording job")
+    if _jobs(readonly, bundle, completed=False).get("OpenAI security gate") != "failure":
+        raise Failure("No failed security job exists for this candidate")
+    fresh(github, hub, bundle)
+    qualification_status(github, DISTRO, expected_head, bundle, "failure")
+    for pr in bundle["prs"]:
+        if pr["repository"] != "distro":
+            qualification_status(github, f"{ORG}/{pr['repository']}", pr["head"], bundle, "failure")
+
+
+def record(github, readonly, hub_number, expected_head, report, security_report):
     from review import validate_review
+    from security_review import validate_report
     hub, bundle = load_bundle(github, hub_number, expected_head)
     if bundle["controller_sha"] != sha(required("GITHUB_SHA")):
         raise Failure("Controller changed; prepare a fresh bundle")
@@ -258,12 +373,14 @@ def record(github, readonly, hub_number, expected_head, report):
     if report["bundle_digest"] != bundle["digest"] or report["integration_head"] != expected_head:
         raise Failure("AI report belongs to another candidate")
     validate_review(report["review"], [p["repository"] for p in bundle["prs"]])
-    text = redact(json.dumps(report, indent=2, ensure_ascii=True))
+    validate_report(security_report, bundle, expected_head)
+    text = redact(json.dumps({"advisory": report, "security": security_report}, indent=2, ensure_ascii=True))
     # A longer fence keeps model-generated backticks inside the data block.
     fence = "`" * max(3, 1 + max((len(m[0]) for m in re.finditer(r"`+", text)), default=0))
     github.repo(DISTRO, f"/issues/{hub['number']}/comments", payload={
-        "body": "Deterministic qualification passed. AI findings are advisory; approval remains "
-                f"with the maintainer.\n\n{fence}json\n{text}\n{fence}"})
+        "body": "Deterministic qualification passed and the security gate accepted these exact commits. "
+                "The general code review is advisory; the configured merge policy controls submission. "
+                f"\n\n{fence}json\n{text}\n{fence}"})
     qualification_status(github, DISTRO, expected_head, bundle, "success")
     for pr in bundle["prs"]:
         if pr["repository"] != "distro":
@@ -282,7 +399,7 @@ def approved(github, hub):
         raise Failure("The configured maintainer must approve the current integration commit")
 
 
-def protection(github, repo, *, hub=False):
+def protection(github, repo, *, hub=False, automatic=False):
     settings = github.repo(repo)
     policy = github.repo(repo, "/branches/main/protection")
     checks = policy.get("required_status_checks") or {}
@@ -299,7 +416,10 @@ def protection(github, repo, *, hub=False):
             or restrictions.get("users") or restrictions.get("teams")
             or any(bypass.get(kind) for kind in ("users", "teams", "apps"))):
         raise Failure("Configure the documented main branch protections before merging")
-    if hub and (reviews.get("required_approving_review_count", 0) < 1
+    if automatic and (reviews.get("required_approving_review_count", 0) != 0
+            or reviews.get("require_code_owner_reviews") or reviews.get("require_last_push_approval")):
+        raise Failure("Automatic mode requires zero human approvals; trusted checks still apply")
+    if hub and not automatic and (reviews.get("required_approving_review_count", 0) < 1
                 or not reviews.get("dismiss_stale_reviews")):
         raise Failure("Distro main requires approval with stale approvals dismissed")
 
@@ -316,19 +436,24 @@ def checked(github, repo, head, bundle):
         raise Failure("A successful trusted qualification status is required for this exact bundle")
 
 
-def merge(github, readonly, hub_number):
+def merge(github, readonly, hub_number, *, automatic=False):
     hub, bundle = load_bundle(github, hub_number)
     head = sha(hub["head"]["sha"])
     if bundle["controller_sha"] != sha(required("GITHUB_SHA")):
         raise Failure("Controller changed; prepare a fresh bundle")
-    _run(readonly, bundle, completed=True)
-    approved(github, hub)
-    protection(github, DISTRO, hub=True)
+    if automatic and (os.environ.get("AUTO_MERGE_ENABLED") != "true"
+                      or os.environ.get("GITHUB_RUN_ID") != str(bundle["run_id"])
+                      or os.environ.get("GITHUB_JOB") != "auto-merge"):
+        raise Failure("Automatic merging only runs after checks in its enabled trusted prepare run")
+    _run(readonly, bundle, completed=not automatic, recorded=True)
+    if not automatic:
+        approved(github, hub)
+    protection(github, DISTRO, hub=True, automatic=automatic)
     checked(github, DISTRO, head, bundle)
     states = fresh(github, hub, bundle, allow_merged=True)
     for pr in bundle["prs"]:
         if pr["repository"] != "distro":
-            protection(github, f"{ORG}/{pr['repository']}")
+            protection(github, f"{ORG}/{pr['repository']}", automatic=automatic)
             checked(github, f"{ORG}/{pr['repository']}", pr["head"], bundle)
     # Only this controller may update protected main branches. The workflow serializes merge jobs.
     order = {repo: index for index, repo in enumerate(MODULES)}
@@ -337,9 +462,10 @@ def merge(github, readonly, hub_number):
         if short == "distro" or states[short] == "merged":
             continue
         current_hub, _ = load_bundle(github, hub_number, head)
-        approved(github, current_hub)
+        if not automatic:
+            approved(github, current_hub)
         fresh(github, current_hub, bundle, allow_merged=True)
-        protection(github, f"{ORG}/{short}")
+        protection(github, f"{ORG}/{short}", automatic=automatic)
         checked(github, f"{ORG}/{short}", pr["head"], bundle)
         result = github.repo(f"{ORG}/{short}", f"/pulls/{pr['number']}/merge", method="PUT",
                              payload={"sha": pr["head"], "merge_method": "merge"})
@@ -347,9 +473,10 @@ def merge(github, readonly, hub_number):
             raise Failure("Component merge refused; distro pins were not promoted")
         candidate_state(github, pr, allow_merged=True)
     current_hub, _ = load_bundle(github, hub_number, head)
-    approved(github, current_hub)
+    if not automatic:
+        approved(github, current_hub)
     fresh(github, current_hub, bundle, allow_merged=True)
-    protection(github, DISTRO, hub=True)
+    protection(github, DISTRO, hub=True, automatic=automatic)
     checked(github, DISTRO, head, bundle)
     result = github.repo(DISTRO, f"/pulls/{hub_number}/merge", method="PUT",
                          payload={"sha": head, "merge_method": "merge"})
@@ -377,20 +504,33 @@ def main():
         return
     client = app_client()
     readonly = GitHub(os.environ.get("GITHUB_TOKEN") or None)
-    if operation == "prepare":
-        pr, head = prepare(client, required("PR_REFERENCES"), required("GITHUB_RUN_ID"), required("GITHUB_SHA"))
+    if operation in {"prepare", "prepare-auto"}:
+        if operation == "prepare-auto":
+            if os.environ.get("AUTO_MERGE_ENABLED") != "true" or os.environ.get("GITHUB_EVENT_NAME") != "schedule":
+                raise Failure("Automatic discovery requires an enabled scheduled run")
+            references = discover(client, required("GITHUB_SHA"))
+            if not references:
+                print("No new ready source revisions; no API review or build scheduled")
+                return
+        else:
+            references = required("PR_REFERENCES")
+        pr, head = prepare(client, references, required("GITHUB_RUN_ID"), required("GITHUB_SHA"))
         output("hub_pr", pr)
         output("hub_head", head)
         print(f"Prepared https://github.com/{DISTRO}/pull/{pr}")
+    elif operation == "deny":
+        deny(client, readonly, number(required("HUB_PR")), required("HUB_HEAD"))
+        print("Recorded failed security gate; candidate code was not qualified or merged")
     elif operation == "record":
         report = json.loads(Path("ai-review.json").read_text())
-        record(client, readonly, number(required("HUB_PR")), required("HUB_HEAD"), report)
-        print("Recorded qualification and advisory AI review")
-    elif operation == "merge":
-        result = merge(client, readonly, number(required("HUB_PR")))
+        security_report = json.loads(Path("security-review.json").read_text())
+        record(client, readonly, number(required("HUB_PR")), required("HUB_HEAD"), report, security_report)
+        print("Recorded qualification, security acceptance and advisory AI review")
+    elif operation in {"merge", "merge-auto"}:
+        result = merge(client, readonly, number(required("HUB_PR")), automatic=operation == "merge-auto")
         print(f"Promoted distro commit {result}")
     else:
-        raise Failure("Expected prepare, manifest, record or merge")
+        raise Failure("Expected prepare, prepare-auto, manifest, deny, record, merge or merge-auto")
 
 
 if __name__ == "__main__":

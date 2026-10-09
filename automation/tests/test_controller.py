@@ -1,6 +1,7 @@
 """Exercise real authorization logic against a stateful fake GitHub API."""
 import base64
 import copy
+import hashlib
 import json
 import os
 import sys
@@ -11,6 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import common
 import controller as c
+import security_review as security
 
 
 def revision(n):
@@ -39,12 +41,15 @@ class FakeGitHub:
                     "base": {"ref": "main", "repo": {"full_name": common.DISTRO}},
                     "head": {"sha": self.head, "ref": "integration/100", "repo": {"full_name": common.DISTRO}}}
         self.main = {common.DISTRO: revision(1), **{f"{common.ORG}/{r}": p for r, p in self.bundle["pins"].items()}}
-        self.prs, self.commits = {}, {(common.DISTRO, self.head): {"tree": {"sha": revision(4)}, "parents": []}}
+        self.prs, self.commits = {}, {(common.DISTRO, self.head): {
+            "tree": {"sha": revision(4)}, "parents": [{"sha": revision(1)}]}}
+        self.hub["user"] = {"login": self.bot_login}
         for pr in self.bundle["prs"]:
             repo = f"{common.ORG}/{pr['repository']}"
             self.main[repo] = pr["base"]
-            self.prs[repo] = {"state": "open", "draft": False, "merged": False,
-                              "head": {"sha": pr["head"]}, "base": {"ref": "main", "repo": {"full_name": repo}}}
+            self.prs[repo] = {"number": pr["number"], "state": "open", "draft": False, "merged": False,
+                              "head": {"sha": pr["head"], "ref": "main", "repo": {"full_name": "contributor/fork"}},
+                              "base": {"ref": "main", "repo": {"full_name": repo}}}
             self.commits[repo, pr["head"]] = {"tree": {"sha": pr["tree"]}, "parents": []}
         self.reviews = [{"id": 1, "user": {"login": "owner"}, "state": "APPROVED", "commit_id": self.head}]
         self.policy = {"required_status_checks": {"checks": [{"context": common.CONTEXT, "app_id": self.app_id}]},
@@ -57,8 +62,8 @@ class FakeGitHub:
                        "description": f"Bundle {self.bundle['digest'][:16]}; run 100"}
         self.run = {"head_sha": revision(2), "head_branch": "main", "path": common.WORKFLOW,
                     "event": "workflow_dispatch", "actor": {"login": "owner"}, "status": "completed", "conclusion": "success"}
-        self.jobs = {"total_count": 2, "jobs": [{"name": "Qualify candidate", "conclusion": "success"},
-                                              {"name": "OpenAI review", "conclusion": "success"}]}
+        self.jobs = {"total_count": 4, "jobs": [{"name": name, "conclusion": "success"} for name in
+                     ["Qualify candidate", "OpenAI review", "OpenAI security gate", "Record review and checks"]]}
         self.merges, self.fail_repo, self.bad_tree = [], None, False
 
     def repo(self, repo, suffix="", **kwargs):
@@ -68,8 +73,23 @@ class FakeGitHub:
             return {"type": "file", "encoding": "base64", "content": base64.b64encode(json.dumps(self.bundle).encode()).decode()}
         if suffix == "/git/ref/heads/main":
             return {"object": {"sha": self.main[repo]}}
+        if suffix.startswith("/git/trees/"):
+            return {"truncated": False, "tree": [{"path": path, "type": "commit", "mode": "160000",
+                                                  "sha": self.bundle["pins"][short]}
+                                                 for short, path in common.MODULES.items()]}
         if suffix.startswith("/compare/"):
+            if repo == common.DISTRO and suffix.endswith("..." + self.head):
+                content = (json.dumps(self.bundle, indent=2, sort_keys=True) + "\n").encode()
+                blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
+                return {"status": "ahead", "behind_by": 0, "total_commits": 1, "files": [
+                    {"filename": f".integration/bundles/{self.bundle['run_id']}.json", "sha": blob, "status": "added"}]}
             return {"status": "ahead", "behind_by": 0}
+        if suffix.startswith("/statuses/") or suffix.endswith("/comments"):
+            return {}
+        if suffix.startswith("/pulls?state=all"):
+            return [copy.deepcopy(self.hub)]
+        if suffix.startswith("/pulls?state=open"):
+            return [copy.deepcopy(self.prs[repo])] if repo in self.prs else []
         if suffix.startswith("/git/commits/"):
             return self.commits[repo, suffix.rsplit("/", 1)[1]]
         if suffix == "/pulls/99/reviews?per_page=100":
@@ -170,7 +190,15 @@ class MergeTests(unittest.TestCase):
                 self.api.run[field] = original
 
     def test_build_and_review_jobs_must_both_succeed(self):
-        self.api.jobs["jobs"][0]["conclusion"] = "failure"
+        for job in self.api.jobs["jobs"]:
+            for conclusion in ["failure", "skipped", None]:
+                with self.subTest(job=job["name"], conclusion=conclusion):
+                    job["conclusion"] = conclusion
+                    self.refused()
+            job["conclusion"] = "success"
+
+    def test_missing_security_job_cannot_use_old_success_receipts(self):
+        self.api.jobs["jobs"] = [job for job in self.api.jobs["jobs"] if job["name"] != "OpenAI security gate"]
         self.refused()
 
     def test_spoofed_or_stale_status(self):
@@ -272,10 +300,58 @@ class MergeTests(unittest.TestCase):
         report = {"bundle_digest": self.api.bundle["digest"], "integration_head": self.api.head,
                   "review": {"summary": "No findings", "findings": [], "limitations": []}}
         with self.assertRaises(common.Failure):
-            c.record(self.api, self.api, 99, revision(999), report)
+            c.record(self.api, self.api, 99, revision(999), report, {})
         report["bundle_digest"] = "another-bundle"
         with self.assertRaises(common.Failure):
-            c.record(self.api, self.api, 99, self.api.head, report)
+            c.record(self.api, self.api, 99, self.api.head, report, {})
+
+    def test_missing_denied_and_stale_security_reports_cannot_publish_success(self):
+        report = {"bundle_digest": self.api.bundle["digest"], "integration_head": self.api.head,
+                  "review": {"summary": "No findings", "findings": [], "limitations": []}}
+        receipt = {"policy": security.POLICY, "bundle_digest": self.api.bundle["digest"],
+                   "integration_head": self.api.head, "model": "configured-model", "review": {
+                       "decision": "accept", "coverage_complete": True,
+                       "summary": "No security findings in supplied changes", "findings": [], "limitations": []}}
+        for bad in [{}, {**receipt, "bundle_digest": "other"}, {**receipt, "integration_head": revision(999)},
+                    {**receipt, "review": security.denied("Unsafe change")}]:
+            with self.subTest(receipt=bad), patch.object(self.api, "repo", wraps=self.api.repo) as requests:
+                with self.assertRaises(common.Failure):
+                    c.record(self.api, self.api, 99, self.api.head, report, bad)
+                self.assertFalse(any("payload" in call.kwargs for call in requests.call_args_list))
+        with patch.object(self.api, "repo", wraps=self.api.repo) as requests:
+            c.record(self.api, self.api, 99, self.api.head, report, receipt)
+            successes = [call for call in requests.call_args_list if call.kwargs.get("payload", {}).get("state") == "success"]
+            self.assertEqual(len(successes), 3)
+
+    def test_tampered_generated_commit_is_not_reviewable_or_mergeable(self):
+        original = self.api.repo
+        def endpoint(repo, suffix="", **kwargs):
+            value = original(repo, suffix, **kwargs)
+            if repo == common.DISTRO and suffix.startswith("/compare/") and suffix.endswith("..." + self.api.head):
+                value["files"].append({"filename": "automation/backdoor.py", "sha": revision(99), "status": "added"})
+            return value
+        with patch.object(self.api, "repo", side_effect=endpoint):
+            self.refused()
+
+    def test_generated_commit_cannot_change_its_parent_or_pins(self):
+        self.api.commits[common.DISTRO, self.api.head]["parents"] = [{"sha": revision(999)}]
+        self.refused()
+
+    def test_security_denial_publishes_failure_only_for_its_own_run(self):
+        gate = next(job for job in self.api.jobs["jobs"] if job["name"] == "OpenAI security gate")
+        gate["conclusion"] = "failure"
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "100", "GITHUB_JOB": "deny"}), \
+                patch.object(self.api, "repo", wraps=self.api.repo) as requests:
+            c.deny(self.api, self.api, 99, self.api.head)
+            failures = [call for call in requests.call_args_list if call.kwargs.get("payload", {}).get("state") == "failure"]
+            self.assertEqual(len(failures), 3)
+        for extra in [{"GITHUB_RUN_ID": "101"}, {"GITHUB_JOB": "prepare"}]:
+            with patch.dict(os.environ, {"GITHUB_RUN_ID": "100", "GITHUB_JOB": "deny", **extra}), \
+                    self.assertRaises(common.Failure):
+                c.deny(self.api, self.api, 99, self.api.head)
+        gate["conclusion"] = "success"
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "100", "GITHUB_JOB": "deny"}), self.assertRaises(common.Failure):
+            c.deny(self.api, self.api, 99, self.api.head)
 
     def test_unselected_pins_cannot_adopt_unmerged_component_code(self):
         original = self.api.repo
@@ -285,6 +361,62 @@ class MergeTests(unittest.TestCase):
             return original(repo, suffix, **kwargs)
         with patch.object(self.api, "repo", side_effect=endpoint):
             self.refused()
+
+
+class AutomaticTests(unittest.TestCase):
+    def setUp(self):
+        self.env = patch.dict(os.environ, {"MAINTAINER_LOGIN": "owner", "GITHUB_SHA": revision(2),
+                              "AUTO_MERGE_ENABLED": "true", "GITHUB_RUN_ID": "100", "GITHUB_JOB": "auto-merge"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.api = FakeGitHub()
+        self.api.policy["required_pull_request_reviews"]["required_approving_review_count"] = 0
+        self.api.reviews = []
+        self.api.run.update(event="schedule", status="in_progress", conclusion=None)
+
+    def test_merges_without_human_approval_after_all_trusted_jobs_pass(self):
+        self.assertEqual(c.merge(self.api, self.api, 99, automatic=True), revision(203))
+
+    def test_wrong_job_run_and_disabled_flag_cannot_merge(self):
+        for field, value in [("AUTO_MERGE_ENABLED", "false"), ("GITHUB_RUN_ID", "101"), ("GITHUB_JOB", "prepare")]:
+            with patch.dict(os.environ, {field: value}), self.assertRaises(common.Failure):
+                c.merge(self.api, self.api, 99, automatic=True)
+            self.assertEqual(self.api.merges, [])
+
+    def test_failed_security_or_unrecorded_result_blocks_auto_merge(self):
+        for name in ["OpenAI security gate", "Record review and checks"]:
+            job = next(job for job in self.api.jobs["jobs"] if job["name"] == name)
+            job["conclusion"] = "failure"
+            with self.assertRaises(common.Failure):
+                c.merge(self.api, self.api, 99, automatic=True)
+            self.assertEqual(self.api.merges, [])
+            job["conclusion"] = "success"
+
+    def test_manual_mode_still_requires_exact_approval(self):
+        self.api.run.update(status="completed", conclusion="success")
+        with self.assertRaises(common.Failure):
+            c.merge(self.api, self.api, 99)
+
+    def test_discovery_skips_attempted_revisions_and_accepts_new_controller(self):
+        self.assertEqual(c.discover(self.api, revision(2)), "")
+        self.api.hub["state"] = "closed"
+        self.assertEqual(c.discover(self.api, revision(2)), "")
+        self.assertEqual(c.discover(self.api, revision(999)), "telorgon#1,settings#2")
+
+    def test_contributor_cannot_forge_attempt_receipts_to_suppress_review(self):
+        self.api.hub["user"]["login"] = "contributor"
+        self.assertEqual(c.discover(self.api, revision(2)), "telorgon#1,settings#2")
+
+    def test_discovery_skips_drafts_and_behind_heads(self):
+        self.api.hub["user"]["login"] = "contributor"
+        self.api.prs[f"{common.ORG}/settings"]["draft"] = True
+        original = self.api.repo
+        def endpoint(repo, suffix="", **kwargs):
+            if repo.endswith("/telorgon") and suffix.startswith("/compare/"):
+                return {"status": "diverged", "behind_by": 1}
+            return original(repo, suffix, **kwargs)
+        with patch.object(self.api, "repo", side_effect=endpoint):
+            self.assertEqual(c.discover(self.api, revision(2)), "")
 
 
 if __name__ == "__main__":

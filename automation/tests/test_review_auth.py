@@ -49,6 +49,10 @@ class ReviewTests(unittest.TestCase):
                          {"status": "completed", "output": [{"type": "message", "content": [{"type": "refusal"}]}]}]:
             with self.assertRaises(common.Failure):
                 review.review(FakeHTTP([response]), "secret", "model", self.data)
+        mixed = self.response()
+        mixed["output"][0]["content"].append({"type": "refusal"})
+        with self.assertRaises(common.Failure):
+            review.review(FakeHTTP([mixed]), "secret", "model", self.data)
 
     def test_invalid_coordinates_and_extra_authority_are_rejected(self):
         for field, value in [("repository", "another-repo"), ("path", "../escape"), ("path", "/abs/file"),
@@ -137,6 +141,11 @@ class AuthTests(unittest.TestCase):
                                  ("INTEGRATION_ENABLED", "false")]:
                 with patch.dict(os.environ, {field: value}), self.assertRaises(common.Failure):
                     common.trusted_dispatch()
+            with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule", "AUTO_MERGE_ENABLED": "true"}):
+                common.trusted_dispatch()
+            with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "schedule", "AUTO_MERGE_ENABLED": "false"}), \
+                    self.assertRaises(common.Failure):
+                common.trusted_dispatch()
 
 
 if __name__ == "__main__":
