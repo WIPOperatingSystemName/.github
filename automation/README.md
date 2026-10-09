@@ -9,14 +9,21 @@ With `INTEGRATION_ENABLED=true` and `AUTO_MERGE_ENABLED=true`:
 2. The trusted `.github/main` workflow polls every 30 minutes and selects the
    oldest unattempted ready PR in each repository. It creates an exact distro
    integration bundle; contributor PRs can use their existing fork `main`.
-3. OpenAI analyzes the immutable diff and full before/after changed text files.
-   Shared contribution instructions and their setup guide are included at the
-   same immutable controller revision, so delegated policy can be assessed.
-   A security finding, material missing context, malformed/refused/incomplete
-   response, or API failure denies the candidate and stops the build and merge.
-4. Accepted candidates build and boot on a disposable worker. A separate general
-   code review runs after qualification. Only the trusted controller can record
-   passing statuses and automatically merge the unchanged tested commits.
+3. Standard GitHub-hosted runners fetch immutable source data, audit the six
+   canonical module mappings and pins, parse changed Python/JSON/TOML files, and
+   check changed package recipe metadata. Candidate code is never executed.
+4. One OpenAI request reviews security and correctness together. It receives the
+   complete immutable patches and full new text files; deleted files include
+   their old text. Shared contribution documents are included at the controller
+   revision only for changes involving delegated contribution policy.
+5. A finding, material missing source context, malformed/refused/incomplete
+   response, or API failure blocks merging. Only the trusted controller records
+   passing statuses and merges the unchanged reviewed commits.
+
+**PR integration does not compile, execute or boot candidate code.** No self-hosted
+runner, DigitalOcean account or managed VM is required. Build and boot verification
+remain mandatory manual checks before a release. An accepted source review is not
+build evidence and does not guarantee that the OS works or is vulnerability-free.
 
 No per-merge GitHub approval or merge dispatch is needed in automatic mode.
 The `.github` controller repository itself remains under manual maintainer
@@ -28,18 +35,18 @@ See [GitHub scheduled workflow behavior](https://docs.github.com/en/actions/refe
 
 An App-owned integration receipt remembers attempted source/base/controller
 revisions, including closed or denied bundles. Unchanged failed revisions are
-not repeatedly sent to OpenAI by polling. Fix or update the source, or have the
+not repeatedly sent to OpenAI by polling, even when an unrelated distro merge
+moves the distro baseline. A new dependency combination can be retried manually. Fix or update the source, or have the
 maintainer deliberately dispatch **prepare** with e.g.
 `telorgon#42,file-explorer#18,settings#9` to retry. A manual prepare also merges
 automatically when automatic mode is enabled. There is one selected PR per
 repository per bundle. Discovery fails closed beyond 100 open PRs per repository
 or 1,000 distro PR receipts; manual prepare remains available.
 
-**Status:** implemented, disabled until configured; live OpenAI review, remote
-full builds and real merges have not yet been verified. The workflow never
-grants the model GitHub credentials: its verdict is one required gate enforced
-by the controller. Signing and public release promotion remain
-separate maintainer operations.
+**Status:** the source-only policy is covered by local tests; live source-only
+reviews and automatic merges have not yet been verified. The model receives no
+GitHub credentials. Signing and public release promotion remain separate
+maintainer operations.
 
 ## 1. Protect the controller
 
@@ -64,15 +71,37 @@ deployments only from `main`:
 Use your OpenAI Platform project, with a restricted project service account and
 appropriate model-request permissions. Choose a model available to your project
 that supports Responses API structured output; set `OPENAI_MODEL` to its ID.
-Configure project usage alerts/limits in OpenAI. Each attempted bundle can make
-one security request (up to 6,000 output tokens) before any candidate execution,
-plus one advisory request (up to 4,000 tokens) after a successful build. Manual
-retries can incur another charge. Security input is limited to 24 changed files,
-32 KB per full text file, 60 KB per repository diff and 180 KB serialized total.
-The advisory combined diffs are limited to 60 KB. Oversized, binary, submodule,
-invalid UTF-8 or unsupported file changes block acceptance; reduce/split the
-change or improve and separately review the trusted review tooling. Data is
-never silently truncated to obtain a passing verdict.
+Configure project usage alerts and monitor the token counters in review receipts.
+The workflow keeps requests bounded:
+
+- One combined security/correctness request per attempted bundle, containing up
+  to seven PRs. There is no separate advisory request, repair loop, model
+  escalation, prewarming request or automatic API retry.
+- Polling makes no OpenAI request when source/base/controller revisions have
+  already been attempted. Explicit manual retries can incur another charge;
+  changing the controller or source/base commits can require a fresh review.
+- Static failures stop before OpenAI authentication or inference. Automatic mode
+  also audits merge protection setup before preparing a candidate, avoiding
+  paid reviews that cannot merge because setup is incomplete.
+- Input is compact UTF-8 JSON, limited to 24 changed files, 32 KB per full text
+  file, 60 KB per repository patch and **96 KB serialized total**. Full old text
+  is omitted for modified files because changed old lines are already in the
+  complete patch. Unrelated shared setup documents are omitted.
+- Output has a **4,000-token ceiling**, including a concise summary and at most
+  12 concrete findings. Input, output and cached-input token counts are recorded
+  when supplied by the API, including for incomplete responses. Missing usage
+  counters remain null; they are not reported as zero-cost requests.
+
+The configured model is retained; select another compatible model with
+`OPENAI_MODEL` after checking review quality and its price. Stable instructions
+and schemas permit supported prompt caching without padding the prompt or making
+extra requests. Token/byte bounds are per attempt, not a monthly dollar cap.
+See [OpenAI cost optimization](https://developers.openai.com/api/docs/guides/cost-optimization)
+and [prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
+
+Oversized, binary, submodule, invalid UTF-8 or unsupported changes block acceptance
+before a paid review. Split the change or improve and separately review the
+trusted tooling. Source data is never silently truncated to obtain acceptance.
 
 **Recommended: no saved API key.** Configure an OpenAI workload identity provider
 for GitHub Actions, issuer `https://token.actions.githubusercontent.com`, audience
@@ -102,12 +131,12 @@ reports and artifacts. See [GitHub secrets](https://docs.github.com/en/actions/h
 
 Diffs are sent to OpenAI as untrusted data. The model has no tools or credentials.
 The request sets `store=false`; this is not a claim that all service retention
-is disabled. The security report is binding: acceptance requires complete declared
-coverage, no findings at any severity and no material context limitations. The
-separate general code review is advisory. Structured output constrains the response
-format, not its correctness; the gate can miss vulnerabilities or reject safe
-changes. It complements deterministic tests and worker isolation. Only public
-source inputs and qualification evidence belong in this pipeline. Never submit
+is disabled. The combined source review is binding: acceptance requires complete
+declared coverage, no security or correctness findings at any severity, and no
+material missing source context. Missing build/boot evidence is explicitly
+reserved for manual release verification. Structured output constrains the
+response format, not its correctness; the gate can miss defects or reject safe
+changes. Only public source inputs belong in this pipeline. Never submit
 signing credentials. Private-key blocks are rejected before API submission;
 this detection does not replace source secret scanning.
 See [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
@@ -131,19 +160,22 @@ In `integration-control`, save the generated PEM as secret
 `INTEGRATION_INSTALLATION_ID`. The controller generates a temporary installation
 token limited to those seven repositories. Its key file is private and temporary.
 The App does not need access to `.github`: that repository's read-only Actions
-token audits qualification runs. See [GitHub App authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
+token audits trusted source-check runs. See [GitHub App authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
 
 Before any merge, configure **classic branch protection** on `main` in all seven
 repositories. This version audits classic protections; rulesets alone won't pass.
 Enable merge commits, enforce protection for administrators, disable force pushes
 and deletion, require a PR, and restrict branch updates to **only this App** with
 no user/team writers or PR bypass allowances. Require status `distro/integration`
-with this App selected as its expected source. Keep other relevant checks.
+with this App selected as its expected source. Keep relevant lightweight checks;
+review your required-check list so an old full-build requirement does not keep
+PRs waiting for the retired automatic build worker.
 For automatic mode, set the required human approval count to **zero in all seven
 repositories**, disable required code-owner/last-push approval, and retain the
 required PR and App-sourced checks. The security gate is enforced through
-`distro/integration`: that status passes only after security acceptance, runtime
-qualification and report validation. Other required CI checks still apply through
+`distro/integration`: that status now represents static source checks, combined
+AI acceptance and immutable receipt validation. It does not represent a build
+or a boot test. Other required CI checks still apply through
 GitHub's merge API; the controller cannot bypass them. Do not use GitHub's native
 auto-merge on individual component PRs because the controller coordinates their
 exact source pins with the distro bundle.
@@ -153,51 +185,54 @@ disabled to publish the initial pending status, then finish the expected-source
 setting before merging. A merge with missing protection fails before changing
 any repository.
 
-## 4. Provide the build worker and enable
+## 4. Enable source-only integration
 
-Publish the distro baseline with all six submodules. Register a **fresh disposable
-Linux x86_64 VM** under label `custom-distro-ephemeral`: at least **128 GiB free
-disk and 16 GiB RAM**, a Debian/Ubuntu apt environment, Rustup, Python 3.11+,
-Meson **>=1.5 at `/usr/bin/meson`**, and Actions Runner **>=2.327.1** for the
-pinned Node 24 actions. The workflow installs declared compiler
-and VM seed packages. Give it at most one job, then destroy the VM, its disk and
-runner registration. Do not attach host credentials, signing keys, persistent
-workspaces or privileged host mounts. Register it for `.github` only; public
-contributor PR workflows must not schedule arbitrary jobs on this runner.
-
-The currently pinned Telorgon revision lacks the settings service API used by
-the desktop consumers. Fix and publish compatible reviewed source pins before
-expecting full qualification to pass. A successful console/systemd boot alone
-does not satisfy this workflow's desktop requirement.
-
-Builds execute contributor code only on this worker. Review, authentication and
-merge run on separate GitHub-hosted machines from the trusted controller commit.
-The worker never receives the OpenAI key, App key or OIDC token. Actions' job-local
-artifact/runtime tokens remain scoped to that job; candidate artifacts are data.
+Publish the distro baseline with all six submodules. Every automatic integration
+job uses a standard GitHub-hosted Ubuntu runner. Only the trusted controller
+checkout is executed; submitted files are fetched through GitHub's API and treated
+as data. The source-check job has no OpenAI or App credential. The OpenAI job has
+no App credential; merge credentials stay in separate trusted controller jobs.
 
 In **.github → Settings → Secrets and variables → Actions → Variables**, add
 `MAINTAINER_LOGIN` using your exact GitHub login. After completing setup, add
 `INTEGRATION_ENABLED=true`, leaving `AUTO_MERGE_ENABLED` unset or `false` for
-the first qualification trial. Until integration is enabled privileged jobs
-are skipped; until automatic mode is enabled polling and automatic merge skip.
+an initial review trial. Until integration is enabled privileged jobs skip;
+until automatic mode is enabled polling and automatic merging skip.
 
-Run prepare against small real PRs, inspect public `candidate-evidence` and
-`security-review`/`ai-review` artifacts and confirm the security job accepted
-and every qualification check passed. Configure the required App checks and
-zero-approval automatic protections, then set `AUTO_MERGE_ENABLED=true` and
-dispatch a fresh prepare trial. It should merge without a human review after
-the trusted checks succeed. Verify the resulting component/distro trees and
-exercise a denied candidate before treating remote integration as verified.
+Dispatch prepare against small real PRs and inspect the `checked-source` and
+`security-review` artifacts. The static receipt must say `build_and_boot: not_run`;
+the AI receipt must accept the same bundle, commit and checked-source digest.
+Configure the required App checks and zero-approval automatic protections, then
+set `AUTO_MERGE_ENABLED=true` and dispatch a fresh prepare. Verify the resulting
+component/distro trees and denial behavior before treating remote integration as
+verified. No VM provisioner or build-runner registration is part of this setup.
+
+## Manual verification before release
+
+The maintainer must build and boot the exact proposed release revision and its
+pinned components. Use the distro Python CLI and preserve real build, console,
+upgrade, systemd, PAM and desktop results. The existing manual
+[distro candidate workflow](https://github.com/WIPOperatingSystemName/distro/actions/workflows/candidate.yml)
+and distro contribution documentation describe the qualification commands;
+the full desktop workflow requires an adequate disposable worker when invoked.
+Trusted local development builds may use the declared host seed environment;
+untrusted recipes still require isolation. Source-review acceptance does not
+waive these release checks or the distro's signing/package revision rules.
+
+The currently pinned Telorgon revision lacks the settings service API used by
+the desktop consumers. Resolve compatible source pins before releasing a
+verified desktop image; source-only integration does not establish runtime
+compatibility or repair that existing build issue.
 
 ## Manual mode
 
 Leave `AUTO_MERGE_ENABLED=false`, require at least one human approval on
 `distro/main` with stale approvals dismissed, then dispatch **prepare**.
-Inspect the accepted security report and runtime evidence, approve the exact
+Inspect the accepted source review and static receipt, approve the exact
 integration commit using `MAINTAINER_LOGIN`, and dispatch **merge** with its
 distro PR number. Manual mode retains the security gate; it is not a security
 bypass. Changed source heads, bases or controller commits require a fresh prepare
-and qualification. A partial automatic merge can be inspected and recovered
+and source review. A partial automatic merge can be inspected and recovered
 using this manual mode after configuring its approval protections.
 
 ## Merge behavior and recovery
@@ -209,9 +244,9 @@ retry accepts an already merged component only if its base, parents, tree and
 current `main` exactly match this bundle. Further changes require a new bundle.
 No controller operation force-pushes or rolls back a public component branch.
 
-Merge commits preserve the tested PR head as an ancestor of component `main`.
-Distro keeps that original tested head as its pin; it does not rewrite pins to
-an untested squash/rebase result. Changes to package payloads still need a package
+Merge commits preserve the reviewed PR head as an ancestor of component `main`.
+Distro keeps that original reviewed head as its pin; it does not rewrite pins to
+a different squash/rebase result. Changes to package payloads still need a package
 revision increase, as described in distro's contribution rules.
 
 Integration runs serialize. GitHub concurrency retains only one pending run, so an
@@ -227,7 +262,8 @@ python3 -I -m unittest discover -s automation/tests -v
 ```
 
 Tests use fake credentials and a stateful fake GitHub API. They exercise automatic
-and manual authority, stale commits/bases, trusted security jobs/receipts,
+and manual authority, stale commits/bases, trusted source jobs/receipts,
 generated-commit integrity, branch protection, polling/retry behavior, merge
-ordering and partial retries, complete bounded source review and OIDC authentication.
+ordering and partial retries, data-only syntax/recipe parsing, bounded source
+review, one-request usage accounting, deduplication and OIDC authentication.
 They do not spend API credits or merge real PRs.
