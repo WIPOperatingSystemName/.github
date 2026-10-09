@@ -1,28 +1,58 @@
 # Run the distro in QEMU
 
-QEMU boots the complete OS image, including the Telorgon desktop and apps.
+QEMU boots images produced by the distro's Python build CLI.
 These steps use the contributor workspace from the
 [organization quickstart](../profile/README.md): `~/wip-os/distro` with its pinned
 source submodules. Run the shell commands below from a Linux terminal or the
 Ubuntu terminal in WSL, stopping if a build command fails.
 
 Linux is the reference build and boot-test platform. The Windows route uses
-WSL2 and WSLg; full distro builds and boot tests there still need verification.
+WSL2 and WSLg. The systemd runtime has passed a local WSLg boot check; the
+current desktop source pins are incompatible, as described below.
 There is currently no published ready-to-run test bundle. Cloning the repos or
 running `setup.py` does not build an OS image. If you already have
 `out/images/custom-distro-desktop-use.img`, skip the source build and go to
 [opening the desktop](#open-the-desktop-and-test-it).
 
+## Current build status
+
+On 2026-10-08, a local Ubuntu 24.04 WSL2 build, including the bootstrap, recipe
+and QEMU launcher fixes from that run, completed all 72 runtime packages and
+passed 97 repository tests. The source-built systemd image booted through OVMF
+and Telorgon EFI in a GTK window displayed through WSLg using TCG. Its guest
+checks verified systemd PID 1, journald, udev, D-Bus, an active UID 1000 PAM/logind
+session, and graphics/input device nodes. The check passed in 17.08 seconds.
+
+Local evidence is retained in `out/verification/build-result.json` and
+`out/verification/systemd-wsl-rng/result.json`, with serial logs and the QEMU
+framebuffer beside the latter. The tested image SHA256 is
+`e88dc79e3383e12aa6e783d05ca4b70521000ef43c8cc5802f64a7161fae6373`.
+These ignored files describe the tested bytes; they are not a published bundle.
+
+**A new desktop image cannot currently be built from the pinned sources.**
+Telorgon `880abac6ae0a3e79856dba0001926c01e089ba65` lacks the
+`desktop-settings-linux` feature and `services::desktop_settings` API requested
+by Shell `87a2744533c0703ed54eb63f5637b0021aaa0784` and Settings
+`ce3b721563a7e071dcfaf512c981e2cbb5371c52`. Cargo stops at feature resolution.
+Matching source revisions or reviewed upstream compatibility changes are needed.
+Removing the feature name alone does not supply the missing API.
+
+The steps below use the distro's `meson-native` bootstrap stage and virtual RNG
+launcher fixes. Use a reviewed distro revision containing those changes.
+`apps check` verifies SDK inputs; its `ready_to_build: true` result does not
+verify Rust feature/API compatibility. The desktop build and rendering gates
+still need to pass for a corrected source combination. Full remote CI remains
+unverified.
+
 ## Linux
 
 Use an x86_64 Linux host with a graphical desktop. The package commands below
-use Ubuntu 26.04 LTS. Other distributions need equivalent
+use Ubuntu 24.04 LTS, matching the locally tested environment. Other distributions need equivalent
 [host seed tools](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/bootstrap.md),
-Python 3.11+ and **Meson 1.5+ at `/usr/bin/meson`**; the build uses a restricted
-tool path. Ubuntu 24.04's default Meson is too old for the desktop build.
-Ubuntu 26.04's [Meson package](https://packages.ubuntu.com/resolute/meson)
-meets this requirement. This host setup has not been qualified end to end on
-every distribution.
+Python 3.11+. Bootstrap stages source-pinned Meson 1.9.2 at
+`out/bootstrap/root/tools/native/bin/meson`. The build's restricted tool path
+selects this private copy; target builds do not require a newer host Meson.
+Equivalent host setups on other distributions require their own qualification.
 
 Install QEMU's x86 system emulator, its GTK display backend and UEFI firmware:
 
@@ -50,7 +80,7 @@ launcher, which requires Linux filesystem locking and Unix sockets.
 For a new installation, run in **PowerShell as Administrator**:
 
 ```powershell
-wsl --install -d Ubuntu-26.04
+wsl --install -d Ubuntu-24.04
 ```
 
 Restart if prompted and complete Ubuntu's user setup. For an existing WSL
@@ -62,13 +92,13 @@ wsl --shutdown
 wsl --list --verbose
 ```
 
-The Ubuntu distribution must show `VERSION 2`. If Ubuntu 26.04 is listed as
-version 1, run `wsl --set-version Ubuntu-26.04 2`. Use the actual distribution
-name from the list for an existing installation. Ubuntu 26.04 is the example
-because its packaged Meson satisfies the desktop build requirement; an older
-Ubuntu installation needs compatible host seed tools before building.
+The Ubuntu distribution must show `VERSION 2`. If Ubuntu 24.04 is listed as
+version 1, run `wsl --set-version Ubuntu-24.04 2`. Use the actual distribution
+name from the list for an existing installation. Ubuntu 24.04 is the example
+because it matches the local build environment; bootstrap supplies the required
+Meson version independently of the host package.
 
-Open **Ubuntu 26.04** from the Start menu and follow the
+Open **Ubuntu 24.04** from the Start menu and follow the
 [workspace setup](../profile/README.md#windows-setup) if you have not cloned it.
 Then run **inside Ubuntu**:
 
@@ -83,11 +113,14 @@ qemu-system-x86_64 -display help
 Keep the workspace under `~/wip-os` in the WSL Linux filesystem. Follow the
 shared build and launch steps below in this same Ubuntu terminal. WSL does not
 need access to `/dev/kvm` to launch: the helper falls back to TCG. Allow extra
-boot time when using software emulation. Record Windows results as new test
-evidence; the existing Linux receipts do not establish WSL compatibility.
+boot time when using software emulation. Record each Windows result against
+its actual image digest. The verified systemd run above does not establish
+Telorgon desktop rendering.
 
 ## Build the first desktop image
 
+The application stage is currently blocked by the source mismatch above. The
+runtime packages and EFI loader can be built and used for the systemd check below.
 Skip this section when the normal desktop image already exists. A fresh desktop
 build compiles the toolchain, kernel, runtime libraries and all apps from source.
 Budget several hours and substantial disk space; the integration worker requires
@@ -102,10 +135,10 @@ sudo apt install -y build-essential bison bc m4 perl autoconf automake \
   e2fsprogs gnupg python3 python3-jinja2 cmake clang libclang-dev \
   curl ca-certificates git
 python3 --version
-/usr/bin/meson --version
 ```
 
-Check Python is at least 3.11 and Meson at least 1.5 before proceeding. Install
+Check Python is at least 3.11 before proceeding. The host Meson package supports
+initial tooling checks; bootstrap supplies the Meson used for target builds. Install
 [Rust through rustup](https://rust-lang.github.io/rustup/installation/index.html)
 if `rustup` and `cargo` are missing, then load its environment and install the
 distro's pinned compiler:
@@ -125,12 +158,21 @@ python3 build.py doctor
 python3 build.py validate
 python3 build.py fetch --bootstrap
 python3 build.py bootstrap --jobs 4
+python3 build.py bootstrap --check
+python3 build.py doctor
 python3 build.py native-toolkit --fetch --jobs 4
 python3 build.py build --jobs 4
 python3 build.py loader --online
 ```
 
-Then compose the desktop SDK, build the apps and create the normal desktop disk:
+After bootstrap, `doctor` must identify Meson under
+`out/bootstrap/root/tools/native/bin/meson`, version 1.9.2, with its recorded
+bootstrap source identity. A stale receipt requires rebuilding the affected
+stage and its consumers. Do not replace receipt fingerprints to accept changed
+artifacts.
+
+Once compatible app source pins are available, compose the desktop SDK, build
+the apps and create the normal desktop disk:
 
 ```sh
 python3 tools/compose-desktop-sdk.py
@@ -141,7 +183,8 @@ python3 build.py apps build --sysroot "$CD_DESKTOP_SYSROOT" --online --jobs 4
 python3 build.py image --profile desktop-use
 ```
 
-`apps check` must report `ready_to_build: true`. `--online` allows the first
+`apps check` must report `ready_to_build: true`, and the app compilation must
+also succeed. `--online` allows the first
 loader/app build to fetch pinned Cargo inputs; omit it once those are cached.
 The resulting base image is **`out/images/custom-distro-desktop-use.img`**.
 All generated build and VM files stay under `distro/out/`.
@@ -179,6 +222,22 @@ Reuse that name to resume that VM. An existing name keeps its disk even after
 you rebuild the base image. Use a different unused name for each fresh test.
 
 ## Automated boot and desktop checks
+
+For the systemd runtime check that passed locally under WSLg, use the source
+packages and EFI loader from the first build block:
+
+```sh
+python3 build.py image --profile systemd
+python3 build.py vm --image out/images/custom-distro-systemd.img \
+  --expect CUSTOM_SYSTEMD_RUNTIME_OK --window --timeout 300 \
+  --output out/verification/systemd-manual
+```
+
+This bounded check records the image digest, serial assertions, QEMU command
+and framebuffer, then closes the window. To keep the window open after startup,
+replace `--window` with `--interactive` and choose a new output directory for
+the run. Both launchers provide a `virtio-rng` device backed by host entropy so
+the Rust UEFI loader can initialize its random state.
 
 Use the separate `desktop` qualification profile for repeatable tests. After the
 desktop build above, run:
@@ -219,11 +278,16 @@ for the exact checks and limits.
 
 | Symptom | What to check |
 | --- | --- |
-| Missing `custom-distro-desktop-use.img` | Complete the source build and `image --profile desktop-use`. Setup alone only clones sources and configures forks. |
+| Missing `custom-distro-desktop-use.img` | The current desktop pins fail app compilation. Correct the source compatibility issue, complete the build, then run `image --profile desktop-use`. Setup alone only clones sources and configures forks. |
 | QEMU missing or GTK display unavailable | Install `qemu-system-x86` and `qemu-system-gui` in the terminal environment running `build.py`; check `-display help` includes `gtk`. |
 | OVMF missing | Install `ovmf`, or set `OVMF_CODE` and `OVMF_VARS` to a matching unsigned firmware pair as shown below. |
 | GTK cannot open a display | On Linux, use a terminal in your graphical login. On Windows, check WSL version 2, update/restart WSL, and follow Microsoft's [WSLg troubleshooting](https://github.com/microsoft/wslg/wiki/Diagnosing-%22cannot-open-display%22-type-issues-with-WSLg). |
-| Meson rejects a project version | Check `/usr/bin/meson --version` is at least 1.5. Installing only a newer Meson under `~/.local/bin` does not change the restricted build tool path. |
+| Meson rejects a project version | Run `bootstrap` and `bootstrap --check`, then confirm `doctor` selects the pinned private Meson 1.9.2. Updating host Meson alone does not create the required bootstrap receipts. |
+| Bootstrap reports changed header artifacts | Use the kernel/glibc header-ownership fix and rebuild the affected bootstrap closure. Glibc adds three SCSI headers; the kernel receipt must exclude those exact glibc-owned paths. |
+| Systemd packaging rejects journal ACL attributes | Use the systemd recipe fix that removes native-install ACLs from its empty staging directory while retaining guest tmpfiles ownership policy. |
+| Portal configuration cannot find `bwrap` | Use the portal recipe fix that detects the source-built Bubblewrap dependency in the target sysroot and compiles `/usr/bin/bwrap` as its guest path. |
+| Cargo rejects `desktop-settings-linux` | The pinned framework and apps are incompatible. Use matching reviewed revisions; preserve the pinned checkouts and do not remove the feature as a substitute for its API. |
+| EFI loader panics with `failed to generate random data` | Use the launcher containing the virtual RNG fix. Its saved `command.json` must include the `rng-random` backend and `virtio-rng-pci` device. |
 | VM is slow | Check `out/vms/custom/command.json` for the selected accelerator. TCG is expected when KVM is unavailable; allow more boot time. |
 | Rebuilt apps do not appear | Rebuild app packages and `image --profile desktop-use`, then launch with a new, unused `--name`. |
 | VM exits or test times out | Read `qemu.log` and `serial.log` in `out/vms/<name>/` for normal use, or your `--output` directory for automated tests. Include those logs, host OS, source commit and the image digest when reporting a bug. |
