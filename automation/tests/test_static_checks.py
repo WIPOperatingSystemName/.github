@@ -13,6 +13,7 @@ import common
 import controller
 import security_review
 import static_checks as checks
+from review import encode_input
 from test_controller import fixture, revision
 
 
@@ -93,6 +94,26 @@ class StaticTests(unittest.TestCase):
                 changed["changes"][0]["files"][0]["after"] = "print('substitution')"
                 Path("checked-source.json").write_text(json.dumps(changed))
                 with self.assertRaises(common.Failure):
+                    checks.load_checked_data(self.bundle, revision(3))
+            finally:
+                os.chdir(old)
+
+    def test_larger_checked_artifact_round_trips_but_oversized_input_is_blocked(self):
+        self.data["changes"][0]["files"] = [
+            {"path": f"docs/guide-{index}.md", "after": "Context paragraph.\n" * 1500} for index in range(4)]
+        self.assertGreater(len(encode_input(self.data).encode()), 96_000)
+        self.assertEqual(checks.parse_changes(self.data), 4)
+        with tempfile.TemporaryDirectory() as directory:
+            old = Path.cwd()
+            try:
+                os.chdir(directory)
+                Path("static-checks.json").write_text(json.dumps({**self.report(), "files_checked": 4}))
+                Path("checked-source.json").write_text(encode_input(self.data))
+                self.assertEqual(checks.load_checked_data(self.bundle, revision(3))[0], self.data)
+                self.data["changes"][0]["files"][0]["after"] = "x" * security_review.MAX_INPUT_BYTES
+                Path("static-checks.json").write_text(json.dumps({**self.report(), "files_checked": 4}))
+                Path("checked-source.json").write_text(encode_input(self.data))
+                with self.assertRaisesRegex(common.Failure, "oversized checked-source artifact"):
                     checks.load_checked_data(self.bundle, revision(3))
             finally:
                 os.chdir(old)
