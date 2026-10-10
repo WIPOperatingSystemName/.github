@@ -40,8 +40,33 @@ and creates or reuses your personal forks. `origin` points to the organization;
 `fork` is your push destination. It preserves existing branches and local work.
 To rerun setup, use the existing `.github/setup.py` rather than cloning again.
 
-For a high-refresh Windows monitor, follow the optional
-[WSLg refresh-rate setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md#wslg-frame-rate).
+Inside WSL, setup also lists your active Windows displays and offers to match
+WSLg's presentation rate to the display you will use for QEMU. Choose a display
+number, or press Enter to keep an existing setting or skip the step. It preserves
+other `.wslgconfig` settings and saves a backup before changes. Setup never
+shuts down WSL automatically.
+
+If instructed, save work in every WSL session, then run in **Windows PowerShell**:
+
+```powershell
+wsl --shutdown
+```
+
+This stops every WSL distribution. Reopen Ubuntu and verify the setting without
+rerunning GitHub setup:
+
+```sh
+python3 ~/wip-os/.github/setup.py --wslg-refresh-rate check
+```
+
+For unattended setup, pass `--wslg-refresh-rate 144` (replace 144 with your
+display's active rate), or `--wslg-refresh-rate skip` to leave it alone. Without
+an interactive terminal, the default skips configuration. Verification checks
+Weston's configured presentation rate; actual visible FPS also depends on the
+guest and Windows display. See the [WSLg setup guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md#wslg-frame-rate)
+for manual configuration, file locations and guest display limits. Legacy inbox
+WSL may require editing its system-wide configuration from an elevated Windows
+terminal; setup reports a permissions failure rather than requesting elevation.
 
 ## Build and run
 
