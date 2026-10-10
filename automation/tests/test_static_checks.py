@@ -82,6 +82,14 @@ class StaticTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(common.Failure):
                 checks.validate_report({**self.report(), **extra}, self.bundle, revision(3))
 
+    def test_large_receipt_uses_the_same_file_limit_as_source_collection(self):
+        for count in (100, security_review.MAX_FILES):
+            report = {**self.report(), "files_checked": count}
+            self.assertEqual(checks.validate_report(report, self.bundle, revision(3)), report)
+        with self.assertRaises(common.Failure):
+            checks.validate_report({**self.report(), "files_checked": security_review.MAX_FILES + 1},
+                                   self.bundle, revision(3))
+
     def test_modified_source_artifact_cannot_reach_paid_review(self):
         self.data["controller_context"] = {"files": [{"path": "automation/controller.py", "content": "trusted gates"}]}
         self.data["dependency_context"] = [{"files": [{"path": "src/distro_build/compose.py", "content": "image API"}]}]
