@@ -1,21 +1,27 @@
-# WIPOperatingSystemName
+# Organization resources
 
-An independent Linux distribution with the Telorgon desktop, application SDK
-and everyday apps.
+This repository holds the WIPOperatingSystemName organization profile,
+contributor workspace helper, shared contribution instructions and source checks.
+See the [organization overview](profile/README.md) for the project repositories.
 
-Start with the [workspace setup](profile/README.md).
+## Get started
 
-On WSL, the setup helper also offers Windows display selection for WSLg's
-refresh rate, with configuration backup and a separate check after restarting WSL.
+1. **[Environment setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md)**
+   — Linux or WSL2, host tools, Rustup, workspace creation and readiness checks.
+2. **[First build](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#first-build)**
+   — build the OS image and open your first saved desktop VM.
+3. **[Daily development](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#update-changed-applications-automatically)**
+   — build and deploy application changes into the running VM.
 
-Then build and open the desktop development VM:
+Installation and build commands live in those guides so there is one current
+setup path. The [documentation index](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/README.md)
+links to testing, architecture, packages and troubleshooting.
 
-```sh
-cd ~/wip-os/distro
-./run --profile desktop-dev --name dev --jobs 4
-```
+## Repository resources
 
-- [Build guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md): host prerequisites, build stages and testing.
-- [Environment setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md): Linux/WSL2, KVM and WSLg frame rate.
-- [Contribution instructions](AGENTS.md): repository synchronization and pull requests.
-- [Maintainer guide](automation/README.md): source checks and manual PR merging.
+| Resource | Purpose |
+| --- | --- |
+| [Organization profile](profile/README.md) | The public project overview and getting-started links |
+| [Workspace helper](setup.py) | Create or reuse the pinned contributor workspace and personal forks |
+| [Contribution instructions](AGENTS.md) | Preserve local work, synchronize repositories and submit PRs |
+| [Maintainer guide](automation/README.md) | Shared source checks, manual review and merging |

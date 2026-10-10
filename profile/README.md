@@ -1,97 +1,44 @@
-# What we're building
+# WIPOperatingSystemName
 
-An independent Linux distribution with the Telorgon desktop, application SDK,
-everyday apps and build tools. The `distro` repository brings the six framework,
-bootloader and application repositories together as pinned source submodules.
+An independent Linux distribution built from source, with the Telorgon desktop,
+application framework and everyday apps. Our build pipeline brings the
+bootloader, OS packages and applications together in a private QEMU VM.
 
-## Workspace setup
+## Start here
 
-Keep the project in `~/wip-os` on Linux or inside WSL. Open that folder in your
-editor so component repositories and organization docs are available together.
+Follow the guides in order. Each guide explains the commands, the terminal to
+use and how to check that the step succeeded.
 
-### Linux
+1. **[Environment setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md)**
+   — prepare Linux or WSL2, install host tools and Rustup, and create your workspace.
+2. **[First build](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#first-build)**
+   — build the OS from source, open a saved VM and check the desktop.
+3. **[Daily development](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#update-changed-applications-automatically)**
+   — edit source, rebuild changed applications and install them through guest pacman.
 
-Install Git, Python 3.11+ and [GitHub CLI](https://cli.github.com/), then run:
+Already set up? Open the
+[documentation index](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/README.md)
+for saved VMs, build progress, cleanup, testing and troubleshooting.
 
-```sh
-git clone https://github.com/WIPOperatingSystemName/.github.git ~/wip-os/.github
-python3 ~/wip-os/.github/setup.py
-```
+## Project repositories
 
-### Windows setup
+| Repository | Role |
+| --- | --- |
+| [distro](https://github.com/WIPOperatingSystemName/distro) | Source-built Linux system, package recipes, images and VM tools |
+| [telorgon](https://github.com/WIPOperatingSystemName/telorgon) | Application framework and SDK |
+| [bootloader](https://github.com/WIPOperatingSystemName/bootloader) | Telorgon EFI bootloader |
+| [shell](https://github.com/WIPOperatingSystemName/shell) | Desktop shell and launcher |
+| [file-explorer](https://github.com/WIPOperatingSystemName/file-explorer) | File Explorer |
+| [settings](https://github.com/WIPOperatingSystemName/settings) | Settings application |
+| [portal-picker](https://github.com/WIPOperatingSystemName/portal-picker) | Desktop portal picker |
 
-Install WSL from **PowerShell as Administrator**:
+## Contribute
 
-```powershell
-wsl --install -d Ubuntu-24.04
-```
+Choose an issue, change the owning repository and test the affected behavior.
+Framework and application changes belong in their component repositories;
+packaging and build changes belong in `distro`.
 
-Restart if prompted, open Ubuntu and create your Linux user. Inside Ubuntu:
-
-```sh
-sudo apt update
-sudo apt install -y git python3 gh
-git clone https://github.com/WIPOperatingSystemName/.github.git ~/wip-os/.github
-python3 ~/wip-os/.github/setup.py
-```
-
-The setup helper signs you into GitHub, clones the pinned source workspace,
-and creates or reuses your personal forks. `origin` points to the organization;
-`fork` is your push destination. It preserves existing branches and local work.
-To rerun setup, use the existing `.github/setup.py` rather than cloning again.
-
-Inside WSL, setup also lists your active Windows displays and offers to match
-WSLg's presentation rate to the display you will use for QEMU. Choose a display
-number, or press Enter to keep an existing setting or skip the step. It preserves
-other `.wslgconfig` settings and saves a backup before changes. Setup never
-shuts down WSL automatically.
-
-If instructed, save work in every WSL session, then run in **Windows PowerShell**:
-
-```powershell
-wsl --shutdown
-```
-
-This stops every WSL distribution. Reopen Ubuntu and verify the setting without
-rerunning GitHub setup:
-
-```sh
-python3 ~/wip-os/.github/setup.py --wslg-refresh-rate check
-```
-
-For unattended setup, pass `--wslg-refresh-rate 144` (replace 144 with your
-display's active rate), or `--wslg-refresh-rate skip` to leave it alone. Without
-an interactive terminal, the default skips configuration. Verification checks
-Weston's configured presentation rate; actual visible FPS also depends on the
-guest and Windows display. See the [WSLg setup guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md#wslg-frame-rate)
-for manual configuration, file locations and guest display limits. Legacy inbox
-WSL may require editing its system-wide configuration from an elevated Windows
-terminal; setup reports a permissions failure rather than requesting elevation.
-
-## Build and run
-
-Complete the [host prerequisites](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md),
-then run from Linux or the Ubuntu terminal in WSL:
-
-```sh
-cd ~/wip-os/distro
-./run --profile desktop-dev --name dev --jobs 4
-```
-
-This builds the desktop development image from source and opens a named QEMU VM.
-Use the [build and deployment guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md)
-for saved VMs, incremental builds and installing edited source through guest pacman.
-The [environment setup guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md)
-covers Linux and WSL2 prerequisites, KVM, firmware and WSLg frame-rate configuration.
-
-## Contributing
-
-Pick an issue, synchronize with the organization, change the owning repository
-and run its relevant checks. Keep framework/app changes in their component repos
-and packaging/build changes in `distro`. Push to your personal fork and open a
-PR to the organization's `main`.
-
-Follow the [shared contribution instructions](https://github.com/WIPOperatingSystemName/.github/blob/main/AGENTS.md)
-for preserving local work, updating an existing contribution and submitting PRs.
-The [maintainer guide](https://github.com/WIPOperatingSystemName/.github/blob/main/automation/README.md)
-covers source checks, manual PR merging and distro source-pin updates.
+Read the [contribution guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/contributing.md)
+and [shared contribution instructions](https://github.com/WIPOperatingSystemName/.github/blob/main/AGENTS.md)
+for preserving local work, synchronizing your fork and opening a pull request.
+Maintainers use the [manual review and merge guide](https://github.com/WIPOperatingSystemName/.github/blob/main/automation/README.md).

@@ -398,8 +398,11 @@ def main():
             raise SetupError(f"WSLg configuration failed: {error}") from error
         print(f"WSLg refresh-rate setup skipped: {error}")
     print(f"\nReady. Open {args.workspace.expanduser().resolve()} in your editor or coding agent.")
-    print("Create a feature branch in the repo you change, then push with: git push -u fork HEAD")
-    print("Open its PR against the corresponding organization's repository, base branch main.")
+    print("Next, verify your environment: "
+          "https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md#4-verify-the-environment")
+    print("Then build your first VM: "
+          "https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#first-build")
+    print("For contributions: https://github.com/WIPOperatingSystemName/.github/blob/main/AGENTS.md")
 
 
 if __name__ == "__main__":
