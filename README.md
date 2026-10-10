@@ -13,4 +13,4 @@ cd ~/wip-os/distro
 - [Build guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md): host prerequisites, build stages and testing.
 - [Environment setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md): Linux/WSL2, KVM and WSLg frame rate.
 - [Contribution instructions](AGENTS.md): repository synchronization and pull requests.
-- [Maintainer automation](automation/README.md): integration and review configuration.
+- [Maintainer guide](automation/README.md): source checks and manual PR merging.

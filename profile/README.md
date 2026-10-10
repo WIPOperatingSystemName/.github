@@ -69,4 +69,4 @@ PR to the organization's `main`.
 Follow the [shared contribution instructions](https://github.com/WIPOperatingSystemName/.github/blob/main/AGENTS.md)
 for preserving local work, updating an existing contribution and submitting PRs.
 The [maintainer guide](https://github.com/WIPOperatingSystemName/.github/blob/main/automation/README.md)
-covers review and controlled integration.
+covers source checks, manual PR merging and distro source-pin updates.

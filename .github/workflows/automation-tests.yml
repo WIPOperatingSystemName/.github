@@ -1,4 +1,4 @@
-name: Automation and contributor setup tests
+name: Contributor and source-check tests
 on:
   push:
     branches: [main]
