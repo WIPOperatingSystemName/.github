@@ -84,21 +84,35 @@ The workflow keeps requests bounded:
 - Static failures stop before OpenAI authentication or inference. Automatic mode
   also audits merge protection setup before preparing a candidate, avoiding
   paid reviews that cannot merge because setup is incomplete.
-- Changed input is compact UTF-8 JSON, limited to 24 files, 32 KB per full text
-  file, 60 KB per repository patch and **192 KB serialized changes**. Full old
-  text is omitted for modified files because changed old lines are already in
-  the complete patch.
+- Changed input is compact UTF-8 JSON, with room for coordinated framework,
+  application and distro PRs. Limits are centralized in
+  [`security_review.py`](security_review.py); static receipt validation uses the
+  same file-count limit. All byte limits below are decimal, including JSON
+  encoding overhead where specified.
+
+  | Input | Limit |
+  | --- | --- |
+  | Changed files across the complete bundle | 250 |
+  | Each full changed or deleted text file | 256 KB |
+  | Complete diff per repository | 1 MB |
+  | Serialized changes across all repositories | 2 MB |
+  | Each fixed dependency/context file | 512 KB |
+  | Complete serialized source and context input | 3 MB |
+
+  Full old text is omitted for modified files because changed old lines are
+  already in the complete patch. Larger inputs can increase review cost; the
+  workflow still makes one bounded request and does not silently truncate source.
 - Review context comes from fixed file sets. Integration workflow callers
   include the reusable workflow, integration workflow, controller, authorization,
   source-check and review implementations at the immutable controller revision.
   Distro CLI/build/image/VM changes include the build and packaging interfaces,
   SDK composer and profiles at that distro PR's exact head. Full changed files
-  already in the input are referenced instead of duplicated. Context files have
-  a 64 KB ceiling; the **complete input has a 512 KB serialized ceiling**. This
-  permits larger paid inputs than the previous 192 KB total ceiling. Missing,
-  oversized or substituted context fails before authentication/inference;
-  exceeding a serialized limit reports the measured bytes. Source is never
-  truncated, and unrelated changes do not include these context sets.
+  already in the input are referenced instead of duplicated. Missing, oversized
+  or substituted context fails before authentication/inference. Oversized source
+  errors identify the repository, file, revision, measured size and applicable
+  limit. Source is never truncated, and unrelated changes do not include these
+  context sets. Byte limits do not establish the configured model's token-context
+  capacity; an API rejection or incomplete review still blocks merging.
 - Output has a **4,000-token ceiling**, including a concise summary and at most
   12 concrete findings. Input, output and cached-input token counts are recorded
   when supplied by the API, including for incomplete responses. Missing usage
@@ -114,6 +128,12 @@ and [prompt caching](https://developers.openai.com/api/docs/guides/prompt-cachin
 Oversized, binary, submodule, invalid UTF-8 or unsupported changes block acceptance
 before a paid review. Split the change or improve and separately review the
 trusted tooling. Source data is never silently truncated to obtain acceptance.
+
+Limit changes take effect after the controller PR merges into `.github/main`.
+Notifications and scheduled scans use that trusted revision, rather than code
+from an open controller PR. The new controller revision makes previously
+attempted component commits eligible for a fresh review. Increasing size limits
+does not supply missing dependency context or override a review denial.
 
 **Recommended: no saved API key.** Configure an OpenAI workload identity provider
 for GitHub Actions, issuer `https://token.actions.githubusercontent.com`, audience

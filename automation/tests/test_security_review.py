@@ -194,7 +194,7 @@ class SecurityTests(unittest.TestCase):
 
     def test_larger_context_file_cannot_bypass_changed_file_or_context_limits(self):
         self.distro_cli_change()
-        content = b"Context line\n" * 3000
+        content = b"Context line\n" * 30_000
         self.assertGreater(len(content), security.MAX_FILE_BYTES)
         original = self.api.repo
         def endpoint(repo, suffix, **kwargs):
@@ -207,19 +207,19 @@ class SecurityTests(unittest.TestCase):
                         if file["path"] == "src/distro_build/apps.py")
             self.assertEqual(apps["content"], content.decode())
             self.api.files[0].update(filename="src/distro_build/apps.py", sha=blob(content))
-            with self.assertRaisesRegex(common.Failure, "oversized source file"):
+            with self.assertRaisesRegex(common.Failure, f"limit is {security.MAX_FILE_BYTES:,} bytes"):
                 security.candidate_data(self.api, self.bundle)
             self.distro_cli_change()
             self.api.files[0]["sha"] = blob(self.api.after)
             content = b"x" * (security.MAX_CONTEXT_FILE_BYTES + 1)
-            with self.assertRaisesRegex(common.Failure, "oversized source file"):
+            with self.assertRaisesRegex(common.Failure, f"limit is {security.MAX_CONTEXT_FILE_BYTES:,} bytes"):
                 security.candidate_data(self.api, self.bundle)
 
     def test_context_headroom_does_not_expand_changed_source_budget(self):
-        self.api.after = b"Source context\n" * 2000
+        self.api.after = b"Source context\n" * 10_000
         self.api.files = [{"filename": f"docs/guide-{index}.md", "sha": blob(self.api.after), "status": "modified"}
-                          for index in range(7)]
-        with self.assertRaisesRegex(common.Failure, "limit is 192,000 bytes"):
+                          for index in range(15)]
+        with self.assertRaisesRegex(common.Failure, f"limit is {security.MAX_CHANGED_INPUT_BYTES:,} bytes"):
             security.candidate_data(self.api, self.bundle)
 
     def test_candidate_cannot_select_external_workflow_context(self):
@@ -252,8 +252,10 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual([file["after"] for file in data["changes"][0]["files"]], [self.api.after.decode()] * 4)
 
     def test_context_limit_reports_encoded_bytes_and_counts_controller_context(self):
-        with self.assertRaisesRegex(common.Failure, "600,002 bytes; limit is 512,000 bytes"):
-            security.check_input_size("\u00e9" * 300_000)
+        value = "\u00e9" * (security.MAX_INPUT_BYTES // 2 + 1)
+        encoded = len(security.encode_input(value).encode())
+        with self.assertRaisesRegex(common.Failure, f"{encoded:,} bytes; limit is {security.MAX_INPUT_BYTES:,} bytes"):
+            security.check_input_size(value)
         self.delegated_policy()
         data = security.candidate_data(self.api, self.bundle)
         # The source changes fit, but the final envelope and trusted context do not.
@@ -261,6 +263,43 @@ class SecurityTests(unittest.TestCase):
         with patch.object(security, "MAX_INPUT_BYTES", limit), self.assertRaisesRegex(
                 common.Failure, "Split the change bundle"):
             security.candidate_data(self.api, self.bundle)
+
+    def test_large_pr_keeps_more_than_24_files_and_a_32kb_plus_source(self):
+        content = b"// Launcher source\n" * 2000
+        self.assertGreater(len(content), 32_000)
+        self.api.files = [{"filename": f"src/module-{index}.rs", "sha": blob(self.api.after), "status": "modified"}
+                          for index in range(100)]
+        self.api.files[0]["sha"] = blob(content)
+        original = self.api.repo
+        def endpoint(repo, suffix, **kwargs):
+            if suffix.startswith("/contents/src/module-0.rs?"):
+                return document(content)
+            if suffix.startswith("/compare/") and "accept" in kwargs:
+                return "diff --git a/src/module-0.rs b/src/module-0.rs\n" + "// Full patch line\n" * 4000
+            return original(repo, suffix, **kwargs)
+        with patch.object(self.api, "repo", side_effect=endpoint):
+            data = security.candidate_data(self.api, self.bundle)
+        self.assertEqual(len(data["changes"][0]["files"]), 100)
+        self.assertEqual(data["changes"][0]["files"][0]["after"], content.decode())
+        self.assertGreater(len(data["changes"][0]["diff"].encode()), 60_000)
+
+    def test_oversized_file_error_identifies_immutable_source_and_measured_limit(self):
+        self.api.after = b"x" * (security.MAX_FILE_BYTES + 1)
+        self.api.files[0]["sha"] = blob(self.api.after)
+        with self.assertRaises(common.Failure) as error:
+            security.candidate_data(self.api, self.bundle)
+        message = str(error.exception)
+        self.assertIn("src/main.py", message)
+        self.assertIn(self.bundle["prs"][0]["head"], message)
+        self.assertIn(f"{len(self.api.after):,} bytes; limit is {security.MAX_FILE_BYTES:,} bytes", message)
+
+    def test_source_error_escapes_untrusted_filename_control_characters(self):
+        self.api.after = b"x" * (security.MAX_FILE_BYTES + 1)
+        self.api.files[0].update(filename="src/main.rs\n::error::untrusted", sha=blob(self.api.after))
+        with self.assertRaises(common.Failure) as error:
+            security.candidate_data(self.api, self.bundle)
+        self.assertNotIn("\n", str(error.exception))
+        self.assertIn("src/main.rs\\n::error::untrusted", str(error.exception))
 
     def test_untrusted_instructions_never_become_api_instructions(self):
         data = security.candidate_data(self.api, self.bundle)

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import DISTRO, MODULES, ORG, Failure, GitHub, redact, required, trusted_dispatch
 from controller import digest, fresh, load_bundle
 from review import encode_input
-from security_review import MAX_INPUT_BYTES, candidate_data, source
+from security_review import MAX_FILES, MAX_INPUT_BYTES, candidate_data, source
 
 POLICY = "static-checks-v1"
 CHECKS = ["immutable_sources", "module_mapping", "python_json_toml_syntax", "recipe_metadata"]
@@ -83,7 +83,7 @@ def validate_report(report, bundle, head):
             or not isinstance(report["source_digest"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", report["source_digest"])
             or report["checks"] != CHECKS or type(report["files_checked"]) is not int
-            or not 1 <= report["files_checked"] <= 24 or report["build_and_boot"] != "not_run"):
+            or not 1 <= report["files_checked"] <= MAX_FILES or report["build_and_boot"] != "not_run"):
         raise Failure("Missing, stale or unsupported static-check receipt")
     return report
 

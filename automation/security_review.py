@@ -16,12 +16,14 @@ from common import CONTROL, Failure, GitHub, HTTP, ORG, openai_token, redact, re
 from controller import fresh, load_bundle, sha
 from review import encode_input, schema as review_schema, structured_review, validate_review
 
-MAX_FILES = 24
-MAX_FILE_BYTES = 32_000
-MAX_CONTEXT_FILE_BYTES = 64_000
-MAX_CHANGED_INPUT_BYTES = 192_000
-MAX_INPUT_BYTES = 512_000
-MAX_DIFF_BYTES = 60_000
+# Keep one bounded request, with enough room for coordinated source changes.
+# static_checks imports these limits so collection and receipt validation agree.
+MAX_FILES = 250
+MAX_FILE_BYTES = 256_000
+MAX_CONTEXT_FILE_BYTES = 512_000
+MAX_CHANGED_INPUT_BYTES = 2_000_000
+MAX_INPUT_BYTES = 3_000_000
+MAX_DIFF_BYTES = 1_000_000
 MAX_OUTPUT_TOKENS = 4000
 CONTEXT_PATHS = ("AGENTS.md", "profile/README.md")
 DISPATCH_WORKFLOW = ".github/workflows/request-integration.yml"
@@ -136,16 +138,23 @@ def source(github, repo, path, revision, expected_blob=None, *, max_bytes=MAX_FI
         raise Failure("Security review encountered an unsafe source path")
     encoded = urllib.parse.quote(path, safe="/")
     document = github.repo(repo, f"/contents/{encoded}?ref={sha(revision)}", limit=max(100_000, 2 * max_bytes))
-    if (document.get("type") != "file" or document.get("encoding") != "base64"
-            or not isinstance(document.get("size"), int) or document["size"] > max_bytes):
-        raise Failure("Security review cannot cover a non-text or oversized source file")
+    identity = f"{repo}/{path!r} at {revision}"
+    if document.get("type") != "file" or document.get("encoding") != "base64":
+        raise Failure(f"Security review requires a base64-encoded regular source file: {identity}")
+    size = document.get("size")
+    if type(size) is not int or size < 0:
+        raise Failure(f"Security source size is invalid: {identity}")
+    if size > max_bytes:
+        raise Failure(f"Security source file {identity} is {size:,} bytes; limit is {max_bytes:,} bytes")
     try:
         content = base64.b64decode("".join(document["content"].splitlines()), validate=True)
         text = content.decode("utf-8")
     except (ValueError, UnicodeError, binascii.Error):
-        raise Failure("Security review cannot cover binary or invalid source content") from None
+        raise Failure(f"Security review cannot cover binary or invalid UTF-8 source: {identity}") from None
     actual = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
-    if (len(content) != document["size"] or len(content) > max_bytes or "\x00" in text
+    if "\x00" in text:
+        raise Failure(f"Security review cannot cover binary source containing NUL bytes: {identity}")
+    if (len(content) != document["size"] or len(content) > max_bytes
             or actual != document.get("sha") or (expected_blob is not None and actual != expected_blob)):
         raise Failure("Security source content differs from its immutable identity")
     if re.search(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", text):
@@ -177,14 +186,15 @@ def candidate_data(github, bundle):
     for pr in bundle["prs"]:
         repo = f"{ORG}/{pr['repository']}"
         endpoint = f"/compare/{sha(pr['base'])}...{sha(pr['head'])}"
-        comparison = github.repo(repo, endpoint, limit=1_000_000)
+        comparison = github.repo(repo, endpoint, limit=MAX_DIFF_BYTES + 1_000_000)
         files = comparison.get("files")
         if (comparison.get("status") not in {"ahead", "identical"} or comparison.get("behind_by")
                 or not isinstance(files, list) or not files):
             raise Failure("Security comparison is incomplete or has no reviewable changes")
         total_files += len(files)
         if total_files > MAX_FILES:
-            raise Failure("Security review exceeds 24 files; split the change bundle")
+            raise Failure(f"Security review contains {total_files:,} changed files through {repo}; "
+                          f"limit is {MAX_FILES:,} files. Split the change bundle")
         diff = github.repo(repo, endpoint, accept="application/vnd.github.diff", limit=MAX_DIFF_BYTES)
         if not isinstance(diff, str) or not diff or len(diff.encode()) > MAX_DIFF_BYTES:
             raise Failure("Security review cannot cover the complete immutable diff")
