@@ -411,7 +411,7 @@ class SecurityTests(unittest.TestCase):
                     security.main()
                 self.assertEqual(len(http.calls), 1)
                 payload = http.calls[0][1]["payload"]
-                self.assertEqual(payload["max_output_tokens"], 4000)
+                self.assertEqual(payload["max_output_tokens"], 32_000)
                 receipt = json.loads(Path("security-review.json").read_text())
                 self.assertEqual(receipt["review"]["decision"], "accept")
                 self.assertEqual(receipt["usage"]["input_tokens"], 100)

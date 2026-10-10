@@ -113,8 +113,14 @@ The workflow keeps requests bounded:
   limit. Source is never truncated, and unrelated changes do not include these
   context sets. Byte limits do not establish the configured model's token-context
   capacity; an API rejection or incomplete review still blocks merging.
-- Output has a **4,000-token ceiling**, including a concise summary and at most
-  12 concrete findings. Input, output and cached-input token counts are recorded
+- Output has a **32,000-token ceiling** shared by model reasoning and the final
+  structured verdict. Reasoning can exhaust this budget before a verdict is
+  produced; see [OpenAI reasoning token guidance](https://developers.openai.com/api/docs/guides/reasoning).
+  The visible report remains limited to a concise summary and at most 12 concrete
+  findings. Incomplete responses record the API's recognized stop reason,
+  including output-budget exhaustion, and block merging without an automatic
+  retry. Increasing the ceiling can increase cost per attempt.
+  Input, output and cached-input token counts are recorded
   when supplied by the API, including for incomplete responses. Missing usage
   counters remain null; they are not reported as zero-cost requests.
 

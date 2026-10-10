@@ -66,7 +66,14 @@ def structured_review(http, token, model, data, *, instructions, output_schema,
         value = (counters.get("input_tokens_details") or {}).get("cached_tokens")
         usage["cached_input_tokens"] = value if type(value) is int and value >= 0 else None
     if response.get("status") != "completed":
-        raise Failure("OpenAI did not finish the review; merging remains blocked")
+        details = response.get("incomplete_details")
+        reason = details.get("reason") if isinstance(details, dict) else None
+        explanation = ""
+        if reason == "max_output_tokens":
+            explanation = f" (max_output_tokens={max_output_tokens} reached; includes reasoning tokens)"
+        elif reason == "content_filter":
+            explanation = " (content_filter)"
+        raise Failure(f"OpenAI did not finish the review{explanation}; merging remains blocked")
     messages = [item for item in response.get("output", []) if item.get("type") == "message"]
     contents = [content for item in messages for content in item.get("content", [])]
     parts = [content["text"] for content in contents if content.get("type") == "output_text"]

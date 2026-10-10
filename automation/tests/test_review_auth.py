@@ -82,14 +82,43 @@ class ReviewTests(unittest.TestCase):
 
     def test_single_request_records_usage_even_for_incomplete_response(self):
         response = self.response(status="incomplete")
+        response["incomplete_details"] = {"reason": "max_output_tokens"}
         response["usage"] = {"input_tokens": 100, "output_tokens": 4000,
                              "input_tokens_details": {"cached_tokens": 50}}
         http, usage = FakeHTTP([response]), {}
-        with self.assertRaises(common.Failure):
+        with self.assertRaisesRegex(common.Failure, r"max_output_tokens=4000 reached"):
             review.structured_review(http, "secret", "model", self.data,
                                      instructions="Review only", output_schema={}, name="test", usage=usage)
         self.assertEqual(len(http.calls), 1)
         self.assertEqual(usage, {"input_tokens": 100, "output_tokens": 4000, "cached_input_tokens": 50})
+
+    def test_incomplete_review_uses_configured_output_budget_and_rejects_partial_acceptance(self):
+        response = self.response({"decision": "accept"}, status="incomplete")
+        response["incomplete_details"] = {"reason": "max_output_tokens"}
+        http = FakeHTTP([response])
+        with self.assertRaisesRegex(common.Failure, r"max_output_tokens=32000 reached"):
+            review.structured_review(http, "secret", "model", self.data,
+                                     instructions="Review only", output_schema={}, name="test",
+                                     max_output_tokens=32_000)
+        self.assertEqual(len(http.calls), 1)
+        self.assertEqual(http.calls[0][1]["payload"]["max_output_tokens"], 32_000)
+
+    def test_incomplete_review_reports_content_filter(self):
+        response = self.response(status="incomplete")
+        response["incomplete_details"] = {"reason": "content_filter"}
+        with self.assertRaisesRegex(common.Failure, r"\(content_filter\); merging remains blocked"):
+            self.call_review(FakeHTTP([response]), "secret", "model", self.data)
+
+    def test_incomplete_review_does_not_echo_unknown_or_malformed_details(self):
+        for details in [None, "private-sentinel", [], {"reason": "private-sentinel\n::error::"},
+                        {"reason": {}}, {"reason": ["max_output_tokens"]}]:
+            with self.subTest(details=details):
+                response = self.response(status="incomplete")
+                response["incomplete_details"] = details
+                with self.assertRaises(common.Failure) as raised:
+                    self.call_review(FakeHTTP([response]), "secret", "model", self.data)
+                self.assertEqual(str(raised.exception),
+                                 "OpenAI did not finish the review; merging remains blocked")
 
     def test_input_is_compact_utf8_without_duplicated_escape_sequences(self):
         data = {"source": "é", "items": [1, 2]}
