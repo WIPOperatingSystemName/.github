@@ -42,6 +42,18 @@ user instructions and existing authorization take precedence.
   submodules as incidental build setup. Work on a component in its owning
   repository; keep distro pin updates separate and reviewed.
 
+## Documentation
+
+- Keep the organization profile and repository READMEs focused on the project,
+  repository roles and links. Keep installation and build commands in the guides.
+- Use distro's [environment setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md)
+  as the canonical Linux/WSL2, host-tool, Rustup and workspace guide, followed by
+  [first build](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#first-build)
+  and daily development. Use numbered steps, terminal labels and completion checks.
+- Update the [documentation index](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/README.md),
+  incoming links and setup helper guidance when reorganizing instructions. Remove
+  superseded setup paths rather than retaining competing copies.
+
 ## Prepare the handoff
 
 - PRs are reviewed and merged manually by the maintainer. Keep ordinary source,
@@ -78,8 +90,8 @@ user instructions and existing authorization take precedence.
   before committing; exclude unrelated files and generated artifacts. Preserve
   the user's branch history and work.
 - Prefer the contributor's configured `fork` remote for pushing, following the
-  [contributor setup](profile/README.md). Verify that it belongs to the intended
-  contributor. If it is missing, use an existing personal fork or create one
+  [contributor setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md#3-create-your-workspace).
+  Verify that it belongs to the intended contributor. If it is missing, use an existing personal fork or create one
   within the authorized submission workflow. Never push directly to the
   organization's default branch.
 - Open the PR against the owning WIPOperatingSystemName repository's actual
