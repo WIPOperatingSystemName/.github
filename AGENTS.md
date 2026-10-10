@@ -44,6 +44,12 @@ user instructions and existing authorization take precedence.
 
 ## Prepare the handoff
 
+- PRs are reviewed and merged manually by the maintainer. Keep ordinary source,
+  catalog and tooling checks; do not add AI review, automatic merges or generated
+  cross-repository integration PRs unless the user explicitly requests them.
+- Component merges do not advance distro source pins. Propose pin changes as a
+  separate distro contribution with the relevant build and VM evidence.
+
 - Complete the requested changes and appropriate verification before offering
   submission. Preserve unrelated work and inspect the final diff.
 - Identify each owning Git repository, its organization upstream and its actual

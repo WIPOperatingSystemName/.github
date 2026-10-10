@@ -1,0 +1,38 @@
+name: Source checks
+
+on:
+  workflow_call:
+    inputs:
+      base-sha:
+        description: Base commit for changed-file checks; empty checks the full tree
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Read candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+      - name: Read trusted checker
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: WIPOperatingSystemName/.github
+          ref: main
+          path: checker
+          sparse-checkout: automation
+          persist-credentials: false
+      - name: Parse source and validate distro metadata
+        env:
+          SOURCE_BASE: ${{ inputs.base-sha }}
+          SOURCE_REPOSITORY: ${{ github.event.repository.name }}
+        run: python3 -I checker/automation/source_checks.py --root candidate --repository "$SOURCE_REPOSITORY" --base "$SOURCE_BASE"
