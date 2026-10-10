@@ -96,6 +96,7 @@ class SetupTests(unittest.TestCase):
 
     def invoke(self, github):
         with patch.object(setup, "run", github.run), patch.object(setup.shutil, "which", return_value="installed"), \
+                patch.object(setup, "is_wsl", return_value=False), \
                 patch.object(setup.sys, "argv", ["setup.py", "--workspace", str(self.workspace)]), \
                 contextlib.redirect_stdout(io.StringIO()):
             setup.main()

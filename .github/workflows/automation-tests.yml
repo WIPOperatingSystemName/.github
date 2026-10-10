@@ -2,9 +2,9 @@ name: Contributor and source-check tests
 on:
   push:
     branches: [main]
-    paths: ['automation/**', 'setup.py', 'tests/**', '.github/workflows/**']
+    paths: ['automation/**', 'setup.py', 'scripts/**', 'tests/**', '.github/workflows/**']
   pull_request:
-    paths: ['automation/**', 'setup.py', 'tests/**', '.github/workflows/**']
+    paths: ['automation/**', 'setup.py', 'scripts/**', 'tests/**', '.github/workflows/**']
 permissions:
   contents: read
 jobs:

@@ -3,7 +3,12 @@
 An independent Linux distribution with the Telorgon desktop, application SDK
 and everyday apps.
 
-Start with the [workspace setup](profile/README.md), then build and open the desktop development VM:
+Start with the [workspace setup](profile/README.md).
+
+On WSL, the setup helper also offers Windows display selection for WSLg's
+refresh rate, with configuration backup and a separate check after restarting WSL.
+
+Then build and open the desktop development VM:
 
 ```sh
 cd ~/wip-os/distro
