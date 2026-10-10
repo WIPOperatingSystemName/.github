@@ -40,21 +40,24 @@ and creates or reuses your personal forks. `origin` points to the organization;
 `fork` is your push destination. It preserves existing branches and local work.
 To rerun setup, use the existing `.github/setup.py` rather than cloning again.
 
+For a high-refresh Windows monitor, follow the optional
+[WSLg refresh-rate setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md#wslg-frame-rate).
+
 ## Build and run
 
-Complete the [host prerequisites](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#host-setup),
+Complete the [host prerequisites](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md),
 then run from Linux or the Ubuntu terminal in WSL:
 
 ```sh
 cd ~/wip-os/distro
-python3 build.py run --profile systemd
+./run --profile desktop-dev --name dev --jobs 4
 ```
 
-This builds the systemd OS test image from source and opens it in QEMU.
-Use the [build guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md)
-for smaller profiles, offline builds and tests, and the
-[emulator guide](https://github.com/WIPOperatingSystemName/.github/blob/main/docs/emulator.md)
-for Linux and Windows GUI setup.
+This builds the desktop development image from source and opens a named QEMU VM.
+Use the [build and deployment guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md)
+for saved VMs, incremental builds and installing edited source through guest pacman.
+The [environment setup guide](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md)
+covers Linux and WSL2 prerequisites, KVM, firmware and WSLg frame-rate configuration.
 
 ## Contributing
 
