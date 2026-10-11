@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 
 
 ORG = "WIPOperatingSystemName"
@@ -277,9 +278,34 @@ def prepare_checkout(workspace):
     distro = workspace / "distro"
     if not distro.exists():
         workspace.mkdir(parents=True, exist_ok=True)
-        print("Cloning distro and its pinned components...", flush=True)
+        print("Cloning distro and its component workspace...", flush=True)
         run("git", "clone", f"https://github.com/{ORG}/distro.git", distro)
     check_checkout(distro, "distro")
+    if not (distro / ".gitmodules").exists():
+        try:
+            document = tomllib.loads((distro / "source-projects.toml").read_text())
+            projects = document["projects"]
+            expected = {Path(relative).name: name for name, relative in MODULES.items()}
+            if document.get("schema") != 1 or set(projects) != set(expected):
+                raise ValueError("Unsupported source registry")
+            for directory, name in expected.items():
+                record = projects[directory]
+                if (record.get("repository") != f"https://github.com/{ORG}/{name}.git"
+                        or record.get("branch") != "main"):
+                    raise ValueError("Unexpected component origin or branch")
+                path = distro / "sources" / directory
+                if not path.resolve().is_relative_to(distro.resolve()):
+                    raise ValueError("Component path leaves distro")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            raise SetupError("Invalid canonical-main source-projects.toml registry.") from error
+        run(sys.executable, "build.py", "sources", "sync", cwd=distro, interactive=True)
+        checkouts = {"distro": distro}
+        for name, relative in MODULES.items():
+            path = distro / relative
+            check_checkout(path, name)
+            checkouts[name] = path
+        return checkouts
+    # Compatibility with distro checkouts predating the live-main registry.
     paths = git(distro, "config", "--file", ".gitmodules", "--get-regexp",
                 r"^submodule\..*\.path$").stdout.splitlines()
     expected = {f"submodule.{name}.path {path}" for name, path in MODULES.items()}

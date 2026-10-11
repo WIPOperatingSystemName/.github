@@ -9,7 +9,7 @@ The distro's manual build and VM qualification workflows remain available.
 
 Each repository's `source-checks.yml` calls the shared read-only workflow in
 `.github`. It parses changed Python, JSON and TOML files without executing them.
-For distro changes it also validates the declared six-submodule mapping and
+For distro changes it also validates the declared canonical-main source registry (or the six-submodule mapping for older checkouts) and
 changed recipes' versions, revisions, runtime dependencies and immutable source
 pins. Deletions are ignored; renames check the new file. An initial push without
 a comparison base checks the full committed tree.
@@ -30,18 +30,18 @@ and VM checks before merging changes that affect runtime behavior. Follow the
    relevant checks. Push to your fork and open or update a PR to organization
    `main`, following the [contribution instructions](../AGENTS.md).
 2. Inspect the diff and check results, resolve problems, then merge the PR in
-   GitHub when satisfied. A component merge does not update distro pins.
-3. When adopting a component version, open a separate distro PR selecting its
-   intended merged commit. Rebuild affected packages, install them through the
-   Python pipeline and guest pacman, and test the actual behavior in a private
-   development VM. Record exact source/package identities and results.
+   GitHub when satisfied. Online distro builds fetch and fast-forward local
+   component clones to organization `main` before snapshotting.
+3. Rebuild affected packages, install them through the Python pipeline and guest
+   pacman, and test the actual behavior in a private development VM. Record exact
+   source/package identities and results. Local edits are preserved; overlapping
+   edits or diverged commits stop automatic updates for deliberate integration.
 
 ## GitHub configuration
 
-Merge the `.github` workflow removal/replacement PR first, then the caller
-updates in the seven source repositories. Caller PR checks need the new checker
-on `.github/main`. Existing generated `integration/*` distro PRs are obsolete;
-close them without merging and keep the original component/distro PRs.
+Merge the `.github` live-main registry support before distro removes its
+submodule mapping: caller PR checks use the checker on `.github/main`. The checker
+and workspace helper support older submodule checkouts during this transition.
 
 The former `distro/integration` status and bot-only push restrictions can block
 manual merges even after the workflow is removed. With explicit maintainer

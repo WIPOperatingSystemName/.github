@@ -38,9 +38,11 @@ user instructions and existing authorization take precedence.
   before pushing. Never overwrite fork history just to match upstream.
 - If fetching or integration is blocked, report the concrete blocker and do
   not describe the fork or PR as synchronized.
-- These rules do not authorize pulling or advancing distro's pinned source
-  submodules as incidental build setup. Work on a component in its owning
-  repository; keep distro pin updates separate and reviewed.
+- Distro component repositories under `sources/` follow canonical organization
+  `main` through the Python source-sync/build commands. Fast-forward updates
+  preserve local work; conflicting edits or diverged history require deliberate
+  integration in the owning repository. Never reset or silently stash work.
+  Use `--offline` explicitly when local source replay is intended.
 
 ## Documentation
 
@@ -59,8 +61,10 @@ user instructions and existing authorization take precedence.
 - PRs are reviewed and merged manually by the maintainer. Keep ordinary source,
   catalog and tooling checks; do not add AI review, automatic merges or generated
   cross-repository integration PRs unless the user explicitly requests them.
-- Component merges do not advance distro source pins. Propose pin changes as a
-  separate distro contribution with the relevant build and VM evidence.
+- Merged component changes become inputs to the next online distro build.
+  Keep component fixes in their owning repositories and record exact source
+  identities and relevant build/VM evidence. Live branch selection does not
+  replace testing or immutable checksums for third-party package archives.
 
 - Complete the requested changes and appropriate verification before offering
   submission. Preserve unrelated work and inspect the final diff.
@@ -99,10 +103,9 @@ user instructions and existing authorization take precedence.
   from the fork's default branch, keep one active contribution per repository:
   later pushes to that branch update the same open PR. Describe the resulting
   behavior and relevant validation; disclose checks that failed or were not run.
-- A change inside a distro source submodule belongs to that component's
-  repository. A distro pin update is separate work and requires an intended,
-  reviewed component commit. Do not advance pins merely to submit a component
-  change.
+- A change inside a distro source clone belongs to that component's repository.
+  Submit component changes separately from distro tooling; source snapshots and
+  receipts record the exact commits and local changes used by each build.
 - Commit/PR approval does not authorize merging, releases, deployment or
   changing branch protection. Leave those to the maintainer unless separately
   authorized.

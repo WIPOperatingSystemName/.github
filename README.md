@@ -22,6 +22,6 @@ links to testing, architecture, packages and troubleshooting.
 | Resource | Purpose |
 | --- | --- |
 | [Organization profile](profile/README.md) | The public project overview and getting-started links |
-| [Workspace helper](setup.py) | Create or reuse the pinned contributor workspace and personal forks |
+| [Workspace helper](setup.py) | Create or reuse the contributor workspace tracking component main and personal forks |
 | [Contribution instructions](AGENTS.md) | Preserve local work, synchronize repositories and submit PRs |
 | [Maintainer guide](automation/README.md) | Shared source checks, manual review and merging |
