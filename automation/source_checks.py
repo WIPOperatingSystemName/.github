@@ -47,6 +47,22 @@ def module_mapping(text):
             raise Failure("Candidate changes the trusted source repository mapping")
 
 
+def source_registry(text):
+    try:
+        document = tomllib.loads(text)
+        projects = document["projects"]
+        expected = {Path(path).name: short for short, path in MODULES.items()}
+        if document.get("schema") != 1 or set(projects) != set(expected):
+            raise ValueError("Unexpected projects")
+        for directory, short in expected.items():
+            record = projects[directory]
+            if (record.get("repository") != f"https://github.com/WIPOperatingSystemName/{short}.git"
+                    or record.get("branch") != "main"):
+                raise ValueError("Unexpected origin or branch")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise Failure("Invalid canonical-main source repository mapping") from None
+
+
 def recipe(document):
     package, dependencies = document.get("package"), document.get("dependencies")
     if (document.get("schema") != 1 or not isinstance(package, dict)
@@ -99,12 +115,18 @@ def check(root, repository, base=""):
             entries[path] = (mode, kind, blob)
     if repository == "distro":
         mapping = entries.get(b".gitmodules")
+        legacy = mapping is not None
+        if not legacy:
+            mapping = entries.get(b"source-projects.toml")
+            if any(mode == b"160000" for mode, _, _ in entries.values()):
+                raise Failure("Live-main sources must not contain pinned gitlinks")
         if not mapping or mapping[0] not in {b"100644", b"100755"}:
-            raise Failure("Missing regular .gitmodules file")
+            raise Failure("Missing regular source repository mapping")
         try:
-            module_mapping(git(root, "cat-file", "blob", mapping[2].decode()).decode("utf-8"))
+            text = git(root, "cat-file", "blob", mapping[2].decode()).decode("utf-8")
+            (module_mapping if legacy else source_registry)(text)
         except UnicodeError:
-            raise Failure("Invalid .gitmodules encoding") from None
+            raise Failure("Invalid source repository mapping encoding") from None
     count = 0
     for raw_path, (mode, kind, blob) in entries.items():
         if changed is not None and raw_path not in changed:

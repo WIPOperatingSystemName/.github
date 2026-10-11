@@ -128,6 +128,41 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(command("git", "-C", sdk, "status", "--porcelain"), original_status)
         self.assertEqual((self.distro / ".gitmodules").read_bytes(), original_modules)
 
+    def live_registry(self):
+        (self.distro / ".gitmodules").unlink()
+        (self.distro / "source-projects.toml").write_text('schema = 1\n' + ''.join(
+            f'[projects."{Path(relative).name}"]\n'
+            f'repository = "https://github.com/{setup.ORG}/{name}.git"\nbranch = "main"\n'
+            for name, relative in setup.MODULES.items()))
+
+    def test_live_main_setup_uses_python_sync_and_connects_all_forks(self):
+        self.live_registry()
+        github = FakeGitHub()
+        synchronization = []
+        original = github.run
+        def forward(*args, **kwargs):
+            if args[:4] == (setup.sys.executable, "build.py", "sources", "sync"):
+                synchronization.append(kwargs)
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return original(*args, **kwargs)
+        github.run = forward
+        self.invoke(github)
+        self.assertEqual(len(synchronization), 1)
+        self.assertEqual(synchronization[0]["cwd"], self.distro)
+        self.assertEqual(github.creations, list(self.checkouts))
+
+    def test_live_main_registry_rejects_wrong_origin_or_branch_before_sync(self):
+        self.live_registry()
+        path = self.distro / "source-projects.toml"
+        valid = path.read_text()
+        for invalid in [valid.replace('/telorgon.git', '/other.git'),
+                        valid.replace('branch = "main"', 'branch = "old"', 1)]:
+            path.write_text(invalid)
+            with patch.object(setup, "run", wraps=REAL_RUN) as run, \
+                    self.assertRaisesRegex(setup.SetupError, "canonical-main"):
+                setup.prepare_checkout(self.workspace)
+            self.assertFalse(any(call.args[0] == setup.sys.executable for call in run.call_args_list))
+
     def test_reuses_renamed_personal_forks(self):
         github = FakeGitHub()
         github.forks = {name: f"contributor/my-{name}" for name in self.checkouts}

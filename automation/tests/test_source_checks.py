@@ -94,6 +94,32 @@ class SourceChecksTests(unittest.TestCase):
         with self.assertRaisesRegex(checks.Failure, "mapping"):
             checks.check(self.root, "distro", base)
 
+    def main_registry(self):
+        return 'schema = 1\n' + ''.join(
+            f'[projects."{Path(path).name}"]\n'
+            f'repository = "https://github.com/WIPOperatingSystemName/{name}.git"\nbranch = "main"\n'
+            for name, path in checks.MODULES.items())
+
+    def test_distro_live_main_registry_accepts_no_gitlinks_and_rejects_untrusted_sources(self):
+        path = self.root / "source-projects.toml"
+        path.write_text(self.main_registry())
+        self.commit()
+        self.assertEqual(checks.check(self.root, "distro")["files_parsed"], 1)
+        for invalid in [self.main_registry().replace('/telorgon.git', '/other.git'),
+                        self.main_registry().replace('branch = "main"', 'branch = "pinned"', 1)]:
+            path.write_text(invalid)
+            self.commit()
+            with self.assertRaisesRegex(checks.Failure, "canonical-main"):
+                checks.check(self.root, "distro")
+
+    def test_distro_live_registry_rejects_leftover_gitlinks(self):
+        (self.root / "source-projects.toml").write_text(self.main_registry())
+        head = self.commit()
+        self.git("update-index", "--add", "--cacheinfo", "160000", head, "sources/old")
+        self.git("commit", "--quiet", "-m", "Old pin")
+        with self.assertRaisesRegex(checks.Failure, "pinned gitlinks"):
+            checks.check(self.root, "distro")
+
     def test_recipes_require_pins_revisions_and_runtime_dependencies(self):
         document = {"schema": 1, "package": {"version": "1.0", "revision": 1},
                     "dependencies": {"runtime": []},
