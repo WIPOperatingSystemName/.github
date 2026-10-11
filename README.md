@@ -7,7 +7,7 @@ See the [organization overview](profile/README.md) for the project repositories.
 ## Get started
 
 1. **[Environment setup](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md)**
-   — Linux or WSL2, host tools, Rustup, workspace creation and readiness checks.
+   — Linux or WSL2, host tools, KVM access, Rustup, workspace creation and readiness checks.
 2. **[First build](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#first-build)**
    — build the OS image and open your first saved desktop VM.
 3. **[Daily development](https://github.com/WIPOperatingSystemName/distro/blob/main/docs/build.md#update-changed-applications-automatically)**
@@ -22,6 +22,6 @@ links to testing, architecture, packages and troubleshooting.
 | Resource | Purpose |
 | --- | --- |
 | [Organization profile](profile/README.md) | The public project overview and getting-started links |
-| [Workspace helper](setup.py) | Create or reuse the contributor workspace tracking component main and personal forks |
+| [Workspace helper](setup.py) | Create or reuse the contributor workspace, configure KVM group access and track component main and personal forks |
 | [Contribution instructions](AGENTS.md) | Preserve local work, synchronize repositories and submit PRs |
 | [Maintainer guide](automation/README.md) | Shared source checks, manual review and merging |

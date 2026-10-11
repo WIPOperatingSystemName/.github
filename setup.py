@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -390,6 +391,60 @@ def connect_fork(path, full_name):
     print(f"{path.name}: origin = organization; fork = {full_name}", flush=True)
 
 
+def configure_kvm(option):
+    """Set up the normal user's device access; QEMU still probes KVM at launch."""
+    if option == "skip":
+        return False
+    if sys.platform != "linux":
+        print("KVM device access is only available on Linux.")
+        return False
+    import grp
+    import pwd
+
+    user = pwd.getpwuid(os.getuid())
+    if user.pw_uid == 0:
+        raise SetupError("Run setup as your normal Linux user, not with sudo or as root.")
+    device = Path("/dev/kvm")
+    try:
+        device_group = device.stat().st_gid
+    except FileNotFoundError:
+        print("KVM device /dev/kvm is unavailable; group membership cannot enable it.")
+        print("Check hardware/kernel virtualization support; on WSL, check nested KVM support.")
+        return False
+    if os.access(device, os.R_OK | os.W_OK):
+        print("Verified: this session can read/write /dev/kvm. QEMU will probe KVM at launch.")
+        return True
+    try:
+        group = grp.getgrnam("kvm")
+    except KeyError:
+        print("No kvm group exists. Install the Ubuntu QEMU host packages from the setup guide.")
+        return False
+    if device_group != group.gr_gid:
+        print("/dev/kvm is not owned by the kvm group; check device permissions before continuing.")
+        return False
+    if group.gr_gid in os.getgroups() or user.pw_gid == group.gr_gid:
+        print("The kvm group is active, but /dev/kvm access is denied; check device permissions.")
+        return False
+    if user.pw_name in group.gr_mem:
+        print(f"{user.pw_name} already belongs to kvm, but this session has not picked it up.")
+    else:
+        command = ("sudo", "usermod", "-aG", "kvm", "--", user.pw_name)
+        if option == "check" or not sys.stdin.isatty():
+            print("KVM group setup needed. Run in your Linux terminal: " + shlex.join(command))
+            if option != "check":
+                print("Automatic group setup skipped without an interactive terminal.")
+            return False
+        if not shutil.which("sudo") or not shutil.which("usermod"):
+            raise SetupError("KVM group setup requires sudo and usermod; install the Ubuntu host tools first.")
+        print("Setting up KVM access: " + shlex.join(command), flush=True)
+        run(*command, interactive=True)
+        print(f"Added {user.pw_name} to kvm; existing group memberships were preserved.")
+    print("Log out of your Linux desktop and sign in again. On WSL, save your work and restart the distribution.")
+    print("For a shell in the current terminal, run: newgrp kvm")
+    print("Then rerun this helper with --kvm check; confirm 'VM acceleration: KVM' at VM launch.")
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path,
@@ -397,14 +452,19 @@ def main():
                         help="workfolder containing distro (default: parent of this .github checkout)")
     parser.add_argument("--wslg-refresh-rate", type=refresh_option, default="auto", metavar="auto|skip|check|Hz",
                         help="offer Windows display selection in WSL (default: auto), skip it, verify after restart, or set Hz")
+    parser.add_argument("--kvm", choices=("auto", "skip", "check"), default="auto",
+                        help="set up missing KVM group membership interactively (default: auto), skip, or verify device access")
     args = parser.parse_args()
     if sys.version_info < (3, 11):
         raise SetupError("Install Python 3.11 or newer.")
-    if args.wslg_refresh_rate == "check":
-        try:
-            configure_wslg("check")
-        except OSError as error:
-            raise SetupError(f"Cannot read WSLg configuration: {error}") from error
+    if args.kvm == "check" or args.wslg_refresh_rate == "check":
+        if args.kvm == "check" and not configure_kvm("check"):
+            raise SetupError("KVM device access verification did not pass.")
+        if args.wslg_refresh_rate == "check":
+            try:
+                configure_wslg("check")
+            except OSError as error:
+                raise SetupError(f"Cannot read WSLg configuration: {error}") from error
         return
     for command in ("git", "gh"):
         if not shutil.which(command):
@@ -417,13 +477,14 @@ def main():
     run("gh", "auth", "setup-git", "--hostname", "github.com")
     for name, path in checkouts.items():
         connect_fork(path, forks[name])
+    configure_kvm(args.kvm)
     try:
         configure_wslg(args.wslg_refresh_rate)
     except (SetupError, OSError) as error:
         if args.wslg_refresh_rate != "auto":
             raise SetupError(f"WSLg configuration failed: {error}") from error
         print(f"WSLg refresh-rate setup skipped: {error}")
-    print(f"\nReady. Open {args.workspace.expanduser().resolve()} in your editor or coding agent.")
+    print(f"\nWorkspace ready. Open {args.workspace.expanduser().resolve()} in your editor or coding agent.")
     print("Next, verify your environment: "
           "https://github.com/WIPOperatingSystemName/distro/blob/main/docs/setup.md#4-verify-the-environment")
     print("Then build your first VM: "
